@@ -1,0 +1,49 @@
+system:
+  device_id: "CAM-001"
+  log_level: "info"
+  log_file: "/var/log/smartcam/app.log"
+  log_max_size_mb: 5
+  log_max_files: 3
+
+camera:
+  device: "/dev/video0"
+  width: 1920
+  height: 1080
+  fps: 30
+  input_format: "YUYV"
+  bitrate_kbps: 2000
+
+sensor:
+  i2c_bus: 1
+  i2c_addr: 0x38
+  sample_interval_sec: 1
+  temp_threshold: 2.0
+  humidity_threshold: 5.0
+
+streaming:
+  rtsp_port: 8554
+  stream_name: "live"
+  max_clients: 10
+
+analysis:
+  motion_detection:
+    enabled: true
+    sensitivity: 0.3
+    min_area: 500
+    check_interval_ms: 200
+  
+  bitrate_adaptation:
+    enabled: true
+    boost_factor: 1.5
+    recovery_time_sec: 30
+
+osd:
+  enabled: true
+  position: "top-right"
+  font_size: 24
+
+ota:
+  server_url: "https://update.example.com"
+  check_interval_sec: 3600
+  certificate: "/etc/smartcam/ota_cert.pem"
+  current_version: "1.0.0"
