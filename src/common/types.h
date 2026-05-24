@@ -3,36 +3,33 @@
 
 #include <cstdint>
 #include <string>
-#include <chrono>
+#include <vector>
 
 namespace smartcam {
 
-using Timestamp = std::chrono::microseconds;
-using Clock = std::chrono::steady_clock;
-
 struct Frame {
-    uint64_t timestamp;
-    uint8_t* data;
-    size_t size;
-    bool is_keyframe;
+    uint64_t timestamp = 0;
+    std::vector<uint8_t> data;
+    bool is_keyframe = false;
+};
+
+struct RawFrame {
+    uint64_t timestamp = 0;
+    std::vector<uint8_t> data;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    std::string format;
+};
+
+struct AudioFrame {
+    uint64_t timestamp = 0;        // 微秒
+    std::vector<uint8_t> data;     // G.711 PCMU 编码数据
 };
 
 struct SensorData {
-    uint64_t timestamp;
-    float temperature;
-    float humidity;
-};
-
-struct EnvironmentChange {
-    bool significant;
-    float temp_delta;
-    float humidity_delta;
-};
-
-struct MotionEvent {
-    uint64_t timestamp;
-    bool detected;
-    int motion_area;
+    uint64_t timestamp = 0;
+    float temperature = 0.0f;
+    float humidity = 0.0f;
 };
 
 } // namespace smartcam
