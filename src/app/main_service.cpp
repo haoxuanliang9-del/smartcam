@@ -1,8 +1,10 @@
 #include "main_service.h"
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/rotating_file_sink.h>
-#include <spdlog/sinks/stdout_color_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <csignal>
+#include <cstdio>
+#include <thread>
 
 namespace smartcam {
 
@@ -12,11 +14,6 @@ static void signal_handler(int signum) {
     SPDLOG_INFO("Received signal {}, shutting down...", signum);
     g_shutdown_requested = true;
 }
-
-MainService::MainService()
-    : timer_manager_(io_ctx_)
-    , frame_queue_(std::make_shared<MessageQueue<Frame>>(64))
-    , sensor_queue_(std::make_shared<MessageQueue<SensorData>>(64)) {}
 
 MainService::~MainService() {
     shutdown();
@@ -31,6 +28,13 @@ bool MainService::init(const std::string& config_path) {
     setup_modules();
     connect_callbacks();
 
+    /*优雅退出
+    signal用于注册信号处理器
+    SIGINT = 用户按 Ctrl+C 组合键
+    SIGTERM = kill 命令
+    即使没有注册这两个信号Ctrl+C和kill依然能够终止进程，但进程会立刻终止来不及释放资源，正确处理终止逻辑。
+    但是有了这两个信号处理器程序就能自己处理这两信号，安全的终止进程。
+    */
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
@@ -67,21 +71,32 @@ void MainService::setup_logging() {
 }
 
 void MainService::setup_modules() {
-    camera_ = std::make_unique<CameraCapture>(frame_queue_);
+    camera_ = std::make_shared<CameraCapture>();
+    audio_ = std::make_shared<AudioCapture>();
     sensor_ = std::make_unique<SensorModule>(sensor_queue_);
-    analysis_ = std::make_unique<IntelligentAnalysis>(sensor_queue_, frame_queue_);
-    rtsp_ = std::make_unique<RtspServer>(frame_queue_);
-    ota_ = std::make_unique<OtaManager>();
+    rtsp_ = std::make_unique<RtspServer>();
+    rtsp_->set_camera(camera_);
+    rtsp_->set_audio(audio_);
+    if (config_.display.enabled) {
+        display_ = std::make_unique<OledDisplay>();
+    }
 }
 
 void MainService::connect_callbacks() {
-    analysis_->set_bitrate_callback([this](uint32_t bitrate) {
-        if (camera_) camera_->set_bitrate(bitrate);
+    camera_->set_actual_bitrate_callback([this](uint32_t kbps) {
+        if (display_) display_->update_bitrate(kbps);
+        latest_bitrate_kbps_ = kbps;
     });
 
-    analysis_->set_osd_callback([this](const std::string& text) {
-        if (camera_) camera_->update_osd_text(text);
-    });
+    if (sensor_) {
+        sensor_->set_data_callback([this](float t, float h) {
+            if (display_) display_->update_sensor(t, h);
+            char buf[128];
+            snprintf(buf, sizeof(buf), "Temp: %.1fC  Hum: %.1f%%  |  %u kbps",
+                     t, h, latest_bitrate_kbps_.load());
+            camera_->update_osd_text(buf);
+        });
+    }
 }
 
 void MainService::run() {
@@ -92,32 +107,30 @@ void MainService::run() {
         return;
     }
 
+    if (!audio_->init(config_.streaming.audio_device)) {
+        SPDLOG_WARN("Failed to initialize audio capture, continuing without audio");
+        audio_.reset();
+    }
+
     if (!sensor_->init(config_.sensor)) {
         SPDLOG_WARN("Failed to initialize sensor module, continuing without sensor");
     }
 
-    if (!analysis_->init(config_.analysis, config_.camera.bitrate_kbps)) {
-        SPDLOG_ERROR("Failed to initialize analysis module");
-        return;
+    if (display_ && !display_->init(config_.display)) {
+        SPDLOG_WARN("Failed to initialize OLED display, continuing without display");
+        display_.reset();
     }
 
-    if (!rtsp_->init(config_.streaming, config_.camera.width,
-                     config_.camera.height, config_.camera.fps)) {
+    if (!rtsp_->init(config_.streaming)) {
         SPDLOG_ERROR("Failed to initialize RTSP server");
         return;
     }
 
-    if (!config_.ota.server_url.empty()) {
-        if (!ota_->init(config_.ota)) {
-            SPDLOG_WARN("Failed to initialize OTA manager");
-        }
-    }
-
     camera_->start();
+    if (audio_) audio_->start();
     sensor_->start();
-    analysis_->start();
+    if (display_) display_->start();
     rtsp_->start();
-    ota_->start();
 
     SPDLOG_INFO("SmartCam service running (RTSP: {})", rtsp_->get_url());
 
@@ -134,13 +147,11 @@ void MainService::shutdown() {
 
     SPDLOG_INFO("Shutting down SmartCam service...");
 
-    if (ota_) ota_->stop();
     if (rtsp_) rtsp_->stop();
-    if (analysis_) analysis_->stop();
+    if (audio_) audio_->stop();
     if (sensor_) sensor_->stop();
+    if (display_) display_->stop();
     if (camera_) camera_->stop();
-
-    timer_manager_.cancel_all();
 
     SPDLOG_INFO("SmartCam service stopped");
 }

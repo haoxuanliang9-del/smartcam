@@ -67,6 +67,7 @@ void SensorModule::sample_loop() {
         if (read(data)) {
             last_data_ = data;
             output_queue_->push(data);
+            if (data_cb_) data_cb_(data.temperature, data.humidity);
         }
 
         std::this_thread::sleep_for(
@@ -114,6 +115,7 @@ bool SensorModule::read_measurement(SensorData& data) {
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
 
+    SPDLOG_INFO("AHT20 read: T={:.1f}C H={:.1f}%", data.temperature, data.humidity);
     return true;
 }
 

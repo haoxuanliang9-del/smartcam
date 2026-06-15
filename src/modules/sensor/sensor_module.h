@@ -7,6 +7,7 @@
 #include "middleware/message_queue.h"
 #include <memory>
 #include <atomic>
+#include <functional>
 
 namespace smartcam {
 
@@ -22,6 +23,9 @@ public:
     bool read(SensorData& data);
     bool is_running() const { return running_; }
 
+    using DataCallback = std::function<void(float temperature, float humidity)>;
+    void set_data_callback(DataCallback cb) { data_cb_ = std::move(cb); }
+
 private:
     void sample_loop();
     bool trigger_measurement();
@@ -34,6 +38,7 @@ private:
     SensorConfig config_;
     std::atomic<bool> running_{false};
     SensorData last_data_{};
+    DataCallback data_cb_;
 };
 
 } // namespace smartcam

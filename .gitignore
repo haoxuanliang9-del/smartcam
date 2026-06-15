@@ -6,3 +6,5 @@ build/
 *.d
 compile_commands.json
 CMakeUserPresets.json
+__pycache__/
+*.pyc
