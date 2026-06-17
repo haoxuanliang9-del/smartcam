@@ -32,6 +32,12 @@ public:
     void set_volume(float volume) { volume_ = volume; }
     float volume() const { return volume_.load(); }
 
+    // Inject optional audio processor (AGC + RNNoise + resample).
+    // When set and enabled, ALSA opens at 48kHz; processor converts to 8kHz.
+    void set_audio_processor(std::shared_ptr<class AudioProcessor> processor) {
+        audio_processor_ = std::move(processor);
+    }
+
 private:
     void capture_loop();
     uint8_t pcmu_encode(int16_t sample);
@@ -44,6 +50,10 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<float> volume_{1.0f};
     std::thread capture_thread_;
+
+    // Enhanced audio path (optional)
+    std::shared_ptr<class AudioProcessor> audio_processor_;
+    bool use_enhanced_path_ = false;
 };
 
 } // namespace smartcam
