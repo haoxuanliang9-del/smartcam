@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(smartcam VERSION 1.0.0 LANGUAGES CXX)
+project(smartcam VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +32,18 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/third_party/concurrentqueue
 )
 
+# RNNoise — neural noise suppression (vendored, always compiled)
+add_library(rnnoise STATIC
+    third_party/rnnoise/denoise.c
+    third_party/rnnoise/rnn.c
+    third_party/rnnoise/rnn_data.c
+    third_party/rnnoise/pitch.c
+    third_party/rnnoise/celt_lpc.c
+    third_party/rnnoise/kiss_fft.c
+)
+target_include_directories(rnnoise PUBLIC third_party/rnnoise)
+target_link_libraries(rnnoise PUBLIC m)
+
 set(SMARTCAM_SOURCES
     src/main.cpp
     src/app/main_service.cpp
@@ -53,6 +65,7 @@ target_link_libraries(smartcam
     spdlog::spdlog
     fmt
     pthread
+    rnnoise
     PkgConfig::ALSA
 )
 
