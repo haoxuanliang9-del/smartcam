@@ -48,10 +48,6 @@ bool VideoProcessor::process(uint8_t* y_data, uint8_t* u_data, uint8_t* v_data,
 #ifdef HAS_OPENCV
     frame_count_++;
 
-    // ── CLAHE on Y channel ──
-    cv::Mat y_channel(height, width, CV_8UC1, y_data, y_stride);
-    clahe_->apply(y_channel, y_channel);
-
     // ── NLMeans denoise (skip-frame) ──
     if (cfg_.denoise_h > 0.0f) {
         int skip = cfg_.denoise_skip_frames + 1; // skip_frames=2 → every 3rd frame
@@ -87,17 +83,27 @@ bool VideoProcessor::process(uint8_t* y_data, uint8_t* u_data, uint8_t* v_data,
             cv::Mat split_channels[3] = {y_denoised, u_denoised_full, v_denoised_full};
             cv::split(yuv_denoised, split_channels);
 
-            // Write Y back (full res)
-            std::memcpy(y_data, y_denoised.data, width * height);
+            // Write Y back (full res) — row-by-row respecting stride
+            for (int r = 0; r < height; r++) {
+                std::memcpy(y_data + r * y_stride, y_denoised.ptr<uint8_t>(r), width);
+            }
 
-            // Downsample UV back to half-res and write
+            // Downsample UV back to half-res and write — row-by-row respecting uv_stride
             cv::Mat u_half_out(height / 2, width / 2, CV_8UC1);
             cv::Mat v_half_out(height / 2, width / 2, CV_8UC1);
             cv::resize(u_denoised_full, u_half_out, cv::Size(width / 2, height / 2), 0, 0, cv::INTER_LINEAR);
             cv::resize(v_denoised_full, v_half_out, cv::Size(width / 2, height / 2), 0, 0, cv::INTER_LINEAR);
-            std::memcpy(u_data, u_half_out.data, (width / 2) * (height / 2));
-            std::memcpy(v_data, v_half_out.data, (width / 2) * (height / 2));
+            for (int r = 0; r < height / 2; r++) {
+                std::memcpy(u_data + r * uv_stride, u_half_out.ptr<uint8_t>(r), width / 2);
+                std::memcpy(v_data + r * uv_stride, v_half_out.ptr<uint8_t>(r), width / 2);
+            }
         }
+    }
+
+    // ── CLAHE on Y channel (every frame) — always after denoise ──
+    {
+        cv::Mat y_channel(height, width, CV_8UC1, y_data, y_stride);
+        clahe_->apply(y_channel, y_channel);
     }
 #endif
 
