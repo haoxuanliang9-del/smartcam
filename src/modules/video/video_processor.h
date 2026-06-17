@@ -6,6 +6,7 @@
 
 #ifdef HAS_OPENCV
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 #endif
 
 namespace smartcam {
