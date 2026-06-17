@@ -1,5 +1,5 @@
-#ifndef SMARTCAM_HAL_VIDEO_FILE_SOURCE_H
-#define SMARTCAM_HAL_VIDEO_FILE_SOURCE_H
+#ifndef SMARTCAM_HAL_V4L2_SOURCE_H
+#define SMARTCAM_HAL_V4L2_SOURCE_H
 
 #include "common/types.h"
 #include <atomic>
@@ -8,18 +8,20 @@
 #include <thread>
 #include <string>
 
-struct AVFormatContext;
-struct AVCodecContext;
 struct SwsContext;
 
 namespace smartcam {
 
-class VideoFileSource {
+class V4l2Source {
 public:
-    VideoFileSource() = default;
-    ~VideoFileSource();
+    V4l2Source() = default;
+    ~V4l2Source();
 
-    bool open(const std::string& file_path);
+    bool open(const std::string& device_path,
+              uint32_t requested_width = 1280,
+              uint32_t requested_height = 720,
+              uint32_t requested_fps = 25,
+              const std::string& pixel_format = "YUYV");
     void close();
 
     bool start();
@@ -33,23 +35,29 @@ public:
     bool is_opened() const { return opened_; }
 
 private:
-    void read_loop();
-    bool seek_to_beginning();
+    void capture_loop();
 
-    std::string file_path_;
+    std::string device_path_;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     uint32_t fps_ = 25;
+    uint32_t v4l2_pixfmt_ = 0;
 
-    AVFormatContext* fmt_ctx_ = nullptr;
-    AVCodecContext* decode_ctx_ = nullptr;
+    int v4l2_fd_ = -1;
+
+    void* mmap_buffers_[4] = {};
+    size_t mmap_buffer_sizes_[4] = {};
+    int num_buffers_ = 0;
+
     SwsContext* sws_ctx_ = nullptr;
-    int video_stream_idx_ = -1;
+    int src_pix_fmt_ = 0;
+    uint64_t output_frame_count_ = 0;
+    uint64_t first_output_ts_us_ = 0;
 
     std::atomic<bool> opened_{false};
     std::atomic<bool> running_{false};
 
-    std::thread read_thread_;
+    std::thread capture_thread_;
     RawFrame latest_frame_;
     std::mutex frame_mutex_;
     std::condition_variable frame_cv_;
@@ -58,4 +66,4 @@ private:
 
 } // namespace smartcam
 
-#endif // SMARTCAM_HAL_VIDEO_FILE_SOURCE_H
+#endif // SMARTCAM_HAL_V4L2_SOURCE_H

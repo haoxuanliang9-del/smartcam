@@ -3,7 +3,7 @@
 
 #include "common/config.h"
 #include "common/types.h"
-#include "hal/video_file_source.h"
+#include "hal/v4l2_source.h"
 #include "middleware/message_queue.h"
 #include <functional>
 #include <memory>
@@ -33,8 +33,10 @@ public:
     void set_bitrate(uint32_t bitrate_kbps);
     void update_osd_text(const std::string& text);
 
-    void add_client_queue(std::shared_ptr<MessageQueue<std::shared_ptr<Frame>>> queue);
-    void remove_client_queue(std::shared_ptr<MessageQueue<std::shared_ptr<Frame>>> queue);
+    void add_client_queue(std::shared_ptr<LatestValue<Frame>> queue);
+    void remove_client_queue(std::shared_ptr<LatestValue<Frame>> queue);
+
+    void request_idr() { request_idr_.store(true, std::memory_order_release); }
 
     using BitrateCallback = std::function<void(uint32_t)>;
     void set_actual_bitrate_callback(BitrateCallback cb) { actual_bitrate_cb_ = std::move(cb); }
@@ -45,15 +47,14 @@ private:
     void capture_loop();
     bool init_encoder();
     bool init_osd_filter();
-    bool encode_frame(AVFrame* frame, uint64_t t_decode, uint32_t frame_seq);
+    bool encode_frame(AVFrame* frame, uint32_t frame_seq, uint64_t capture_ts);
 
-    std::vector<std::shared_ptr<MessageQueue<std::shared_ptr<Frame>>>> client_queues_;
+    std::vector<std::shared_ptr<LatestValue<Frame>>> client_slots_;
     std::mutex queues_mutex_;
-    VideoFileSource video_source_;
+    V4l2Source v4l2_source_;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     uint32_t fps_ = 25;
-    uint32_t bitrate_kbps_ = 1000;
     OsdConfig osd_config_;
 
     AVCodecContext* encoder_ctx_ = nullptr;
@@ -76,6 +77,7 @@ private:
     std::atomic<uint32_t> actual_bitrate_kbps_{0};
 
     AVBSFContext* annexb_bsf_ = nullptr;
+    std::atomic<bool> request_idr_{false};
 };
 
 } // namespace smartcam

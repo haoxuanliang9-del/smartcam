@@ -22,7 +22,6 @@ struct ClientSession {
     std::string client_ip;
     std::string session_id;
 
-    // 视频传输参数
     int client_rtp_port = 0;
     int client_rtcp_port = 0;
     int server_rtp_port = 0;
@@ -36,11 +35,10 @@ struct ClientSession {
     std::atomic<bool> rtp_running{false};
     std::thread rtp_thread;
     std::mutex fd_mutex;
-    std::shared_ptr<MessageQueue<std::shared_ptr<Frame>>> frame_queue;
-    std::atomic<bool> fd_closed{false};      // fd 是否已关闭，防止竞态
-    std::atomic<bool> send_failed{false};     // TCP 发送失败标记
+    std::shared_ptr<LatestValue<Frame>> frame_slot;
+    std::atomic<bool> fd_closed{false};
+    std::atomic<bool> send_failed{false};
 
-    // 音频传输参数
     int audio_client_rtp_port = 0;
     int audio_client_rtcp_port = 0;
     int audio_server_rtp_port = 0;
@@ -50,7 +48,7 @@ struct ClientSession {
     int audio_rtcp_channel = 3;
     std::atomic<bool> audio_rtp_running{false};
     std::thread audio_rtp_thread;
-    std::shared_ptr<MessageQueue<std::shared_ptr<AudioFrame>>> audio_frame_queue;
+    std::shared_ptr<LatestValue<AudioFrame>> audio_frame_slot;
     bool audio_setup_done = false;
 };
 
@@ -73,7 +71,6 @@ private:
     void accept_loop();
     void handle_client(int fd, const std::string& client_ip);
 
-    // RTSP method handlers
     void handle_options(ClientSession& sess, const std::string& cseq);
     void handle_describe(ClientSession& sess, const std::string& cseq);
     void handle_setup(ClientSession& sess, const std::string& cseq, const std::string& request);
@@ -81,34 +78,27 @@ private:
     void handle_teardown(ClientSession& sess, const std::string& cseq);
     void handle_get_parameter(ClientSession& sess, const std::string& cseq);
 
-    // Request/response helpers
     bool parse_next_request(std::string& recv_buf, std::string& out_request);
     void send_response(ClientSession& sess, int code, const std::string& cseq,
                        const std::string& extra_headers, const std::string& body);
     void send_tcp_rtp(ClientSession& sess, int channel, const uint8_t* data, size_t len);
 
-    // RTP streaming
     void send_rtp_stream(int rtp_sock, const std::string& client_ip, int client_rtp_port,
         std::atomic<bool>& client_playing, std::atomic<bool>& rtp_running,
-        std::shared_ptr<MessageQueue<std::shared_ptr<Frame>>> frame_queue);
+        std::shared_ptr<LatestValue<Frame>> frame_slot);
     void send_rtp_stream_tcp(int fd, int channel,
         std::function<void(int, const uint8_t*, size_t)> send_fn,
         std::atomic<bool>& client_playing, std::atomic<bool>& rtp_running,
-        std::shared_ptr<MessageQueue<std::shared_ptr<Frame>>> frame_queue);
+        std::shared_ptr<LatestValue<Frame>> frame_slot);
 
-    // 音频 RTP streaming
     void send_audio_rtp_stream(int rtp_sock, const std::string& client_ip, int client_rtp_port,
         std::atomic<bool>& client_playing, std::atomic<bool>& audio_rtp_running,
-        std::shared_ptr<MessageQueue<std::shared_ptr<AudioFrame>>> audio_frame_queue);
+        std::shared_ptr<LatestValue<AudioFrame>> audio_frame_slot);
     void send_audio_rtp_stream_tcp(int fd, int rtp_channel, int rtcp_channel,
         std::function<void(int, const uint8_t*, size_t)> send_fn,
         std::atomic<bool>& client_playing, std::atomic<bool>& audio_rtp_running,
-        std::shared_ptr<MessageQueue<std::shared_ptr<AudioFrame>>> audio_frame_queue);
+        std::shared_ptr<LatestValue<AudioFrame>> audio_frame_slot);
 
-    // RTCP Sender Report
-    void send_rtcp_sr(int sock, const std::string& client_ip, int client_rtcp_port,
-        uint32_t ssrc, uint64_t ntp_timestamp, uint32_t rtp_timestamp,
-        uint32_t packet_count, uint32_t octet_count);
     void send_rtcp_sr_tcp(std::function<void(int, const uint8_t*, size_t)> send_fn,
         int rtcp_channel, uint32_t ssrc, uint64_t ntp_timestamp, uint32_t rtp_timestamp,
         uint32_t packet_count, uint32_t octet_count);

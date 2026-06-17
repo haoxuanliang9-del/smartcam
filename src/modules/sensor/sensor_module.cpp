@@ -127,12 +127,4 @@ bool SensorModule::check_calibration() {
     return (status & 0x08) != 0;
 }
 
-bool SensorModule::reset_sensor() {
-    if (!i2c_hal_.write(AHT20_CMD_RESET, sizeof(AHT20_CMD_RESET))) {
-        return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    return i2c_hal_.write(AHT20_CMD_INIT, sizeof(AHT20_CMD_INIT));
-}
-
 } // namespace smartcam

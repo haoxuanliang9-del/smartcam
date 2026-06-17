@@ -114,7 +114,11 @@ void AudioCapture::capture_loop() {
     std::vector<int16_t> pcm_buf(period_frames);
     std::vector<uint8_t> ulaw_buf(period_frames);
 
-    auto start_time = std::chrono::steady_clock::now();
+    // 关键修复：基于"累计采样数"推算时间戳，而不是 wall clock
+    // 因为 ALSA 会预填内部缓冲，连续两次 snd_pcm_readi 之间 wall clock
+    // 可能只增加 66us，但 samples 增加了 320，会导致 RTP ts 重复 / 倒退
+    uint64_t total_samples = 0;
+    const uint32_t sample_rate = 8000;
 
     while (running_) {
         snd_pcm_sframes_t frames = snd_pcm_readi(pcm_, pcm_buf.data(), period_frames);
@@ -131,15 +135,37 @@ void AudioCapture::capture_loop() {
 
         if (frames == 0) continue;
 
+        // 软件增益（VM 上常见 mic 信号很弱，放大后才听得清）
+        float vol = volume_.load();
+        if (vol != 1.0f) {
+            for (snd_pcm_sframes_t i = 0; i < frames; i++) {
+                int32_t s = static_cast<int32_t>(pcm_buf[i] * vol);
+                if (s > 32767) s = 32767;
+                if (s < -32768) s = -32768;
+                pcm_buf[i] = static_cast<int16_t>(s);
+            }
+        }
+
+        // 噪声门：低幅值低于阈值（默认 1500 ≈ -27dBFS）视为环境噪声，强制静默
+        // 解决 VMware 虚拟声卡 + 笔记本 mic 的底噪问题
+        const int16_t noise_gate = 1500;
+        int16_t peak = 0;
+        for (snd_pcm_sframes_t i = 0; i < frames; i++) {
+            int16_t a = pcm_buf[i] >= 0 ? pcm_buf[i] : -pcm_buf[i];
+            if (a > peak) peak = a;
+        }
+        if (peak < noise_gate) {
+            std::fill(pcm_buf.begin(), pcm_buf.begin() + frames, 0);
+        }
+
         // G.711 PCMU 编码
         for (snd_pcm_sframes_t i = 0; i < frames; i++) {
             ulaw_buf[i] = pcmu_encode(pcm_buf[i]);
         }
 
-        // 计算时间戳（微秒）
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - start_time);
-        uint64_t timestamp = static_cast<uint64_t>(elapsed.count());
+        // 计算时间戳（微秒）：基于累计采样数推算，保证单调递增
+        uint64_t timestamp = (total_samples * 1000000ULL) / sample_rate;
+        total_samples += static_cast<uint64_t>(frames);
 
         AudioFrame frame;
         frame.timestamp = timestamp;
@@ -150,27 +176,25 @@ void AudioCapture::capture_loop() {
 
         {
             std::lock_guard<std::mutex> lock(queues_mutex_);
-            for (auto& queue : client_queues_) {
-                if (!queue->push(shared_frame)) {
-                    SPDLOG_DEBUG("Audio frame dropped for client queue, queue full");
-                }
+            for (auto& slot : client_slots_) {
+                slot->put(shared_frame);
             }
         }
     }
 }
 
-void AudioCapture::add_client_queue(std::shared_ptr<MessageQueue<std::shared_ptr<AudioFrame>>> queue) {
+void AudioCapture::add_client_queue(std::shared_ptr<LatestValue<AudioFrame>> slot) {
     std::lock_guard<std::mutex> lock(queues_mutex_);
-    client_queues_.push_back(queue);
-    SPDLOG_INFO("Audio client queue added, total queues: {}", client_queues_.size());
+    client_slots_.push_back(slot);
+    SPDLOG_INFO("Audio client slot added, total: {}", client_slots_.size());
 }
 
-void AudioCapture::remove_client_queue(std::shared_ptr<MessageQueue<std::shared_ptr<AudioFrame>>> queue) {
+void AudioCapture::remove_client_queue(std::shared_ptr<LatestValue<AudioFrame>> slot) {
     std::lock_guard<std::mutex> lock(queues_mutex_);
-    auto it = std::remove(client_queues_.begin(), client_queues_.end(), queue);
-    if (it != client_queues_.end()) {
-        client_queues_.erase(it, client_queues_.end());
-        SPDLOG_INFO("Audio client queue removed, remaining queues: {}", client_queues_.size());
+    auto it = std::remove(client_slots_.begin(), client_slots_.end(), slot);
+    if (it != client_slots_.end()) {
+        client_slots_.erase(it, client_slots_.end());
+        SPDLOG_INFO("Audio client slot removed, remaining: {}", client_slots_.size());
     }
 }
 

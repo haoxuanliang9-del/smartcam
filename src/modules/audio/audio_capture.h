@@ -23,21 +23,26 @@ public:
     void start();
     void stop();
 
-    void add_client_queue(std::shared_ptr<MessageQueue<std::shared_ptr<AudioFrame>>> queue);
-    void remove_client_queue(std::shared_ptr<MessageQueue<std::shared_ptr<AudioFrame>>> queue);
+    void add_client_queue(std::shared_ptr<LatestValue<AudioFrame>> queue);
+    void remove_client_queue(std::shared_ptr<LatestValue<AudioFrame>> queue);
 
     bool is_running() const { return running_; }
+
+    // 设置音频软件增益（1.0 = 不放大，4.0 ≈ +12dB）
+    void set_volume(float volume) { volume_ = volume; }
+    float volume() const { return volume_.load(); }
 
 private:
     void capture_loop();
     uint8_t pcmu_encode(int16_t sample);
 
-    std::vector<std::shared_ptr<MessageQueue<std::shared_ptr<AudioFrame>>>> client_queues_;
+    std::vector<std::shared_ptr<LatestValue<AudioFrame>>> client_slots_;
     std::mutex queues_mutex_;
 
     _snd_pcm* pcm_ = nullptr;
     std::string device_;
     std::atomic<bool> running_{false};
+    std::atomic<float> volume_{1.0f};
     std::thread capture_thread_;
 };
 

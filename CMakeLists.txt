@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+list(APPEND CMAKE_PREFIX_PATH /usr)
+
 option(ENABLE_DEBUG "Enable debug logging" OFF)
 
 if(ENABLE_DEBUG)
@@ -12,8 +14,6 @@ if(ENABLE_DEBUG)
 else()
     add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO)
 endif()
-
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
@@ -36,7 +36,7 @@ set(SMARTCAM_SOURCES
     src/main.cpp
     src/app/main_service.cpp
     src/common/config.cpp
-    src/hal/video_file_source.cpp
+    src/hal/v4l2_source.cpp
     src/hal/i2c_hal.cpp
     src/hal/spi_hal.cpp
     src/modules/camera/camera_capture.cpp

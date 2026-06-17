@@ -19,8 +19,12 @@ bool Config::load(const std::string& path) {
 
         if (root["camera"]) {
             auto n = root["camera"];
-            if (n["video_file"]) camera.video_file = n["video_file"].as<std::string>();
             if (n["bitrate_kbps"]) camera.bitrate_kbps = n["bitrate_kbps"].as<uint32_t>();
+            if (n["v4l2_device"]) camera.v4l2_device = n["v4l2_device"].as<std::string>();
+            if (n["v4l2_width"]) camera.v4l2_width = n["v4l2_width"].as<uint32_t>();
+            if (n["v4l2_height"]) camera.v4l2_height = n["v4l2_height"].as<uint32_t>();
+            if (n["v4l2_fps"]) camera.v4l2_fps = n["v4l2_fps"].as<uint32_t>();
+            if (n["v4l2_pix_fmt"]) camera.v4l2_pix_fmt = n["v4l2_pix_fmt"].as<std::string>();
         }
 
         if (root["sensor"]) {
@@ -36,6 +40,8 @@ bool Config::load(const std::string& path) {
             if (n["stream_name"]) streaming.stream_name = n["stream_name"].as<std::string>();
             if (n["max_clients"]) streaming.max_clients = n["max_clients"].as<uint32_t>();
             if (n["audio_device"]) streaming.audio_device = n["audio_device"].as<std::string>();
+            if (n["audio_enabled"]) streaming.audio_enabled = n["audio_enabled"].as<bool>();
+            if (n["audio_volume"]) streaming.audio_volume = n["audio_volume"].as<float>();
         }
 
         if (root["osd"]) {

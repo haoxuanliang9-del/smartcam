@@ -15,8 +15,13 @@ struct SystemConfig {
 };
 
 struct CameraConfig {
-    std::string video_file = "/root/video.mp4";
-    uint32_t bitrate_kbps = 1000;
+    // V4L2 camera configuration
+    std::string v4l2_device = "/dev/video0";
+    uint32_t v4l2_width = 1280;
+    uint32_t v4l2_height = 720;
+    uint32_t v4l2_fps = 10;
+    std::string v4l2_pix_fmt = "yuyv422";
+    uint32_t bitrate_kbps = 2500;
 };
 
 struct SensorConfig {
@@ -30,6 +35,8 @@ struct StreamingConfig {
     std::string stream_name = "live";
     uint32_t max_clients = 10;
     std::string audio_device = "plughw:0,0";
+    bool audio_enabled = true;
+    float audio_volume = 1.0f;
 };
 
 struct OsdConfig {

@@ -31,7 +31,6 @@ private:
     bool trigger_measurement();
     bool read_measurement(SensorData& data);
     bool check_calibration();
-    bool reset_sensor();
 
     std::shared_ptr<MessageQueue<SensorData>> output_queue_;
     I2cHal i2c_hal_;

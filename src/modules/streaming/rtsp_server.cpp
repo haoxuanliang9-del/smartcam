@@ -4,6 +4,7 @@
 #include <spdlog/spdlog.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
@@ -17,6 +18,7 @@
 #include <ctime>
 #include <fstream>
 #include <time.h>
+#include <poll.h>
 
 namespace smartcam {
 
@@ -26,57 +28,10 @@ static uint64_t wall_clock_us() {
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + ts.tv_nsec / 1000ULL;
 }
 
-class LatencyLogger {
-public:
-    static LatencyLogger& instance() {
-        static LatencyLogger logger;
-        return logger;
-    }
-
-    void open(const std::string& path) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (ofs_.is_open()) return;
-        ofs_.open(path, std::ios::out | std::ios::trunc);
-        ofs_ << "frame_seq,is_keyframe,t_decode,t_encode_in,t_encode_out,t_queue_push,t_rtp_send,"
-             << "encode_us,queue_us,server_us" << "\n";
-        ofs_.flush();
-    }
-
-    void log(const Frame& frame) {
-        uint64_t encode_us = frame.t_encode_out - frame.t_encode_in;
-        uint64_t queue_us = frame.t_rtp_send - frame.t_queue_push;
-        uint64_t server_us = frame.t_rtp_send - frame.t_decode;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!ofs_.is_open()) return;
-        ofs_ << frame.frame_seq << ","
-             << (frame.is_keyframe ? 1 : 0) << ","
-             << frame.t_decode << ","
-             << frame.t_encode_in << ","
-             << frame.t_encode_out << ","
-             << frame.t_queue_push << ","
-             << frame.t_rtp_send << ","
-             << encode_us << ","
-             << queue_us << ","
-             << server_us << "\n";
-        count_++;
-        if (count_ % 25 == 0) ofs_.flush();
-    }
-
-private:
-    LatencyLogger() = default;
-    std::ofstream ofs_;
-    std::mutex mutex_;
-    int count_ = 0;
-};
-
-// ---------------------------------------------------------------------------
-// 前向声明：RTCP Sender Report 辅助函数
-// ---------------------------------------------------------------------------
-
 static uint64_t get_ntp_timestamp();
 static std::vector<uint8_t> build_rtcp_sr(uint32_t ssrc, uint64_t ntp_timestamp,
-                                           uint32_t rtp_timestamp,
-                                           uint32_t packet_count, uint32_t octet_count);
+                                            uint32_t rtp_timestamp,
+                                            uint32_t packet_count, uint32_t octet_count);
 
 RtspServer::~RtspServer() { stop(); }
 
@@ -88,7 +43,6 @@ void RtspServer::set_audio(std::shared_ptr<AudioCapture> audio) {
     audio_ = audio;
 }
 
-//初始化TCP链接
 bool RtspServer::init(const StreamingConfig& config) {
     config_ = config;
     server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
@@ -99,6 +53,8 @@ bool RtspServer::init(const StreamingConfig& config) {
 
     int opt = 1;
     setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    int tcp_nodelay = 1;
+    setsockopt(server_fd_, IPPROTO_TCP, TCP_NODELAY, &tcp_nodelay, sizeof(tcp_nodelay));
 
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
@@ -121,11 +77,9 @@ bool RtspServer::init(const StreamingConfig& config) {
 
     url_ = "rtsp://" + get_local_ip() + ":" + std::to_string(config_.rtsp_port) + "/" + config_.stream_name;
     SPDLOG_INFO("RTSP server initialized on port {}", config_.rtsp_port);
-    LatencyLogger::instance().open("/tmp/smartcam_latency.csv");
     return true;
 }
 
-//启动accept链接线程
 void RtspServer::start() {
     if (running_) return;
     running_ = true;
@@ -138,15 +92,12 @@ void RtspServer::stop() {
     running_ = false;
     if (server_fd_ >= 0) { shutdown(server_fd_, SHUT_RDWR); close(server_fd_); server_fd_ = -1; }
     if (accept_thread_.joinable()) accept_thread_.join();
-    // 客户端线程已 detach，通过 running_=false 自行退出
     client_threads_.clear();
     SPDLOG_INFO("RTSP server stopped");
 }
 
-//获取RTSP服务器URL
 std::string RtspServer::get_url() const { return url_; }
 
-//获取本地IP地址
 std::string RtspServer::get_local_ip() const {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) return "0.0.0.0";
@@ -163,7 +114,6 @@ std::string RtspServer::get_local_ip() const {
     return std::string(buf);
 }
 
-//accept链接循环
 void RtspServer::accept_loop() {
     while (running_) {
         struct sockaddr_in client_addr = {};
@@ -179,7 +129,6 @@ void RtspServer::accept_loop() {
     }
 }
 
-//解析指定头字段的值
 static std::string extract_header(const std::string& request, const std::string& header) {
     std::string search = header + ":";
     size_t pos = request.find(search);
@@ -216,7 +165,6 @@ static std::vector<std::pair<const uint8_t*, size_t>> parse_nals(const uint8_t* 
     return nals;
 }
 
-//把二进制数据转换成文本字符串
 static std::string base64_encode(const uint8_t* data, size_t len) {
     static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string result;
@@ -251,7 +199,6 @@ void RtspServer::extract_sps_pps(const uint8_t* data, size_t size) {
     }
 }
 
-//获取已经缓存好的H.264 视频编码的关键参数集SPS/PPS
 std::string RtspServer::get_sprop_parameter_sets() const {
     std::lock_guard<std::mutex> lock(sps_mutex_);
     if (!sps_cached_ || !pps_cached_) return "";
@@ -259,12 +206,7 @@ std::string RtspServer::get_sprop_parameter_sets() const {
            base64_encode(pps_data_.data(), pps_data_.size());
 }
 
-// ---------------------------------------------------------------------------
-// Request/response helpers
-// ---------------------------------------------------------------------------
-//解析RTSP请求报文
 bool RtspServer::parse_next_request(std::string& recv_buf, std::string& out_request) {
-    //如果开头是一个完整交错帧，则删除它
     while (!recv_buf.empty() && recv_buf[0] == '$') {
         if (recv_buf.size() < 4) return false;
         size_t pkt_len = ((uint8_t)recv_buf[2] << 8) | (uint8_t)recv_buf[3];
@@ -272,18 +214,15 @@ bool RtspServer::parse_next_request(std::string& recv_buf, std::string& out_requ
         recv_buf.erase(0, 4 + pkt_len);
     }
 
-    // 交错帧不完整，解析失败
     size_t header_end = recv_buf.find("\r\n\r\n");
     if (header_end == std::string::npos) return false;
 
-    //解析消息体长度
     size_t content_len = 0;
     size_t content_len_pos = recv_buf.find("Content-Length:");
     if (content_len_pos != std::string::npos && content_len_pos < header_end) {
         size_t vstart = recv_buf.find(':', content_len_pos) + 1;
         while (vstart < recv_buf.size() && recv_buf[vstart] == ' ') vstart++;
         content_len = atoi(recv_buf.c_str() + vstart);
-        // 防止恶意 Content-Length 导致超大内存分配
         if (content_len > 512 * 1024) {
             SPDLOG_WARN("RTSP: Content-Length {} too large, discarding request", content_len);
             recv_buf.erase(0, header_end + 4);
@@ -291,17 +230,14 @@ bool RtspServer::parse_next_request(std::string& recv_buf, std::string& out_requ
         }
     }
 
-    //消息体不完整，解析失败
     size_t total_len = header_end + 4 + content_len;
     if (recv_buf.size() < total_len) return false;
 
-    //解析成功，返回完整RTSP请求报文
     out_request = recv_buf.substr(0, total_len);
     recv_buf.erase(0, total_len);
     return true;
 }
 
-//构造一个RTSP响应报文并发送给客户端
 void RtspServer::send_response(ClientSession& sess, int code, const std::string& cseq,
                                const std::string& extra_headers, const std::string& body) {
     std::ostringstream ss;
@@ -321,8 +257,7 @@ void RtspServer::send_response(ClientSession& sess, int code, const std::string&
     ss << "\r\n";
     if (!body.empty()) ss << body;
     std::string resp = ss.str();
-    SPDLOG_DEBUG("RTSP response:\n{}", resp);
-    //fd在RTP发送线程中会被访问，需要上锁
+
     std::lock_guard<std::mutex> lock(sess.fd_mutex);
     if (sess.fd_closed) return;
     ssize_t ret = ::send(sess.fd, resp.data(), resp.size(), MSG_NOSIGNAL);
@@ -335,13 +270,9 @@ void RtspServer::send_response(ClientSession& sess, int code, const std::string&
     }
 }
 
-#include <poll.h>
-
 void RtspServer::send_tcp_rtp(ClientSession& sess, int channel, const uint8_t* data, size_t len) {
     if (sess.fd_closed || sess.send_failed) return;
 
-    // 将 header + data 拼成连续 buffer，避免 header 和 data 之间被其他线程插入
-    // 这解决了 TCP interleaved 模式下音视频线程交叉发送导致的数据流污染问题
     std::vector<uint8_t> packet(4 + len);
     packet[0] = '$';
     packet[1] = static_cast<uint8_t>(channel);
@@ -349,8 +280,7 @@ void RtspServer::send_tcp_rtp(ClientSession& sess, int channel, const uint8_t* d
     packet[3] = len & 0xFF;
     memcpy(packet.data() + 4, data, len);
 
-    // 音频 channel 使用更短的 poll 超时，避免被视频拥塞拖累（队头阻塞缓解）
-    int poll_timeout_ms = (channel % 2 == 1) ? 2 : 10;
+    int poll_timeout_ms = (channel % 2 == 1) ? 2 : 2;
 
     size_t sent = 0;
     while (sent < packet.size() && sess.client_playing && running_ && !sess.fd_closed) {
@@ -367,9 +297,7 @@ void RtspServer::send_tcp_rtp(ClientSession& sess, int channel, const uint8_t* d
             pfd.fd = sess.fd;
             pfd.events = POLLOUT;
             int pret = poll(&pfd, 1, poll_timeout_ms);
-            // 音频：如果 poll 超时仍不可写，直接丢弃当前包（实时性优先于可靠性）
             if (pret == 0 && channel % 2 == 1) {
-                SPDLOG_DEBUG("Audio TCP: send congestion, dropping packet to avoid HOL blocking");
                 return;
             }
         } else {
@@ -379,19 +307,11 @@ void RtspServer::send_tcp_rtp(ClientSession& sess, int channel, const uint8_t* d
     }
 }
 
-// ---------------------------------------------------------------------------
-// RTSP method handlers
-// ---------------------------------------------------------------------------
-
-//告知客户端支持的RTSP方法
-//包含请求行：Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, GET_PARAMETER
 void RtspServer::handle_options(ClientSession& sess, const std::string& cseq) {
     send_response(sess, 200, cseq,
         "Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, GET_PARAMETER\r\n", "");
 }
 
-//告知媒体信息
-//需要发送一个SDP包（双轨道：视频+音频）
 void RtspServer::handle_describe(ClientSession& sess, const std::string& cseq) {
     std::string sprop = get_sprop_parameter_sets();
     std::string fmtp = "a=fmtp:96 packetization-mode=1";
@@ -406,6 +326,7 @@ void RtspServer::handle_describe(ClientSession& sess, const std::string& cseq) {
         "s=SmartCam\r\n"
         "c=IN IP4 " + get_local_ip() + "\r\n"
         "t=0 0\r\n"
+        "a=x-rtsp-latency:100\r\n"
         "m=video 0 RTP/AVP 96\r\n"
         "a=rtpmap:96 H264/90000\r\n"
         "a=control:trackID=0\r\n" +
@@ -417,25 +338,17 @@ void RtspServer::handle_describe(ClientSession& sess, const std::string& cseq) {
         "Content-Type: application/sdp\r\n", sdp);
 }
 
-/*
-SETUP请求的核心字段是Transport头字段，一般格式为：
-Transport: 传输协议;传输模式;客户端端口（一对，一个RTP一个RTCP）;其它参数
-支持视频(trackID=0)和音频(trackID=1)分别SETUP
-*/
 void RtspServer::handle_setup(ClientSession& sess, const std::string& cseq,
                               const std::string& request) {
     std::string transport_hdr = extract_header(request, "Transport");
     SPDLOG_INFO("RTSP SETUP Transport: {}", transport_hdr);
 
-    //判断是视频还是音频SETUP
     bool is_audio_setup = (request.find("trackID=1") != std::string::npos ||
                            request.find("trackid=1") != std::string::npos);
 
-    //检查是否为TCP交错传输
     bool tcp_interleaved = (transport_hdr.find("interleaved") != std::string::npos);
 
     if (is_audio_setup) {
-        // ===== 音频 SETUP =====
         if (tcp_interleaved) {
             size_t il_pos = transport_hdr.find("interleaved=");
             if (il_pos != std::string::npos) {
@@ -469,7 +382,6 @@ void RtspServer::handle_setup(ClientSession& sess, const std::string& cseq,
                     sess.audio_client_rtcp_port = sess.audio_client_rtp_port + 1;
                 }
 
-                //音频RTP的UDP socket
                 if (sess.audio_rtp_sock >= 0) close(sess.audio_rtp_sock);
                 sess.audio_rtp_sock = socket(AF_INET, SOCK_DGRAM, 0);
                 int bsize = 512*1024;
@@ -506,7 +418,6 @@ void RtspServer::handle_setup(ClientSession& sess, const std::string& cseq,
         sess.audio_setup_done = true;
         sess.tcp_interleaved = tcp_interleaved;
     } else {
-        // ===== 视频 SETUP =====
         sess.tcp_interleaved = tcp_interleaved;
         if (sess.tcp_interleaved) {
             size_t il_pos = transport_hdr.find("interleaved=");
@@ -585,10 +496,10 @@ void RtspServer::handle_play(ClientSession& sess, const std::string& cseq) {
         sess.client_playing = true;
         sess.rtp_running = true;
 
-        //视频RTP
-        sess.frame_queue = std::make_shared<MessageQueue<std::shared_ptr<Frame>>>(64);
+        sess.frame_slot = std::make_shared<LatestValue<Frame>>();
         if (camera_) {
-            camera_->add_client_queue(sess.frame_queue);
+            camera_->add_client_queue(sess.frame_slot);
+            camera_->request_idr();
         }
 
         if (sess.tcp_interleaved) {
@@ -599,21 +510,20 @@ void RtspServer::handle_play(ClientSession& sess, const std::string& cseq) {
                 };
                 send_rtp_stream_tcp(sess.fd, sess.rtp_channel, send_fn,
                                     sess.client_playing, sess.rtp_running,
-                                    sess.frame_queue);
+                                    sess.frame_slot);
             });
         } else if (sess.rtp_sock >= 0) {
             SPDLOG_INFO("RTSP PLAY: video UDP streaming to {}:{}", sess.client_ip, sess.client_rtp_port);
             sess.rtp_thread = std::thread([this, &sess]() {
                 send_rtp_stream(sess.rtp_sock, sess.client_ip, sess.client_rtp_port,
                                 sess.client_playing, sess.rtp_running,
-                                sess.frame_queue);
+                                sess.frame_slot);
             });
         }
 
-        //音频RTP
         if (audio_ && sess.audio_setup_done) {
-            sess.audio_frame_queue = std::make_shared<MessageQueue<std::shared_ptr<AudioFrame>>>(64);
-            audio_->add_client_queue(sess.audio_frame_queue);
+            sess.audio_frame_slot = std::make_shared<LatestValue<AudioFrame>>();
+            audio_->add_client_queue(sess.audio_frame_slot);
             sess.audio_rtp_running = true;
 
             if (sess.tcp_interleaved) {
@@ -625,7 +535,7 @@ void RtspServer::handle_play(ClientSession& sess, const std::string& cseq) {
                     send_audio_rtp_stream_tcp(sess.fd, sess.audio_rtp_channel,
                         sess.audio_rtcp_channel, send_fn,
                         sess.client_playing, sess.audio_rtp_running,
-                        sess.audio_frame_queue);
+                        sess.audio_frame_slot);
                 });
             } else if (sess.audio_rtp_sock >= 0) {
                 SPDLOG_INFO("RTSP PLAY: audio UDP streaming to {}:{}", sess.client_ip, sess.audio_client_rtp_port);
@@ -633,7 +543,7 @@ void RtspServer::handle_play(ClientSession& sess, const std::string& cseq) {
                     send_audio_rtp_stream(sess.audio_rtp_sock, sess.client_ip,
                         sess.audio_client_rtp_port,
                         sess.client_playing, sess.audio_rtp_running,
-                        sess.audio_frame_queue);
+                        sess.audio_frame_slot);
                 });
             }
         }
@@ -646,11 +556,11 @@ void RtspServer::handle_teardown(ClientSession& sess, const std::string& cseq) {
     sess.audio_rtp_running = false;
     sess.playing = false;
 
-    if (sess.frame_queue && camera_) {
-        camera_->remove_client_queue(sess.frame_queue);
+    if (sess.frame_slot && camera_) {
+        camera_->remove_client_queue(sess.frame_slot);
     }
-    if (sess.audio_frame_queue && audio_) {
-        audio_->remove_client_queue(sess.audio_frame_queue);
+    if (sess.audio_frame_slot && audio_) {
+        audio_->remove_client_queue(sess.audio_frame_slot);
     }
 
     send_response(sess, 200, cseq, "Session: " + sess.session_id + "\r\n", "");
@@ -660,28 +570,22 @@ void RtspServer::handle_get_parameter(ClientSession& sess, const std::string& cs
     send_response(sess, 200, cseq, "Session: " + sess.session_id + "\r\n", "");
 }
 
-// ---------------------------------------------------------------------------
-// Main client handler
-// ---------------------------------------------------------------------------
-
-//处理客户端RTSP请求
 void RtspServer::handle_client(int fd, const std::string& client_ip) {
     ClientSession sess;
     sess.fd = fd;
     sess.client_ip = client_ip;
 
-    //生成一个随机数作为会话ID
     std::random_device rd;
     sess.session_id = std::to_string(rd());
 
-    //设置socket为非阻塞模式
     int flags = fcntl(fd, F_GETFL, 0);
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    int tcp_nodelay = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &tcp_nodelay, sizeof(tcp_nodelay));
 
     char buf[65536];
     std::string recv_buf;
-    static constexpr size_t MAX_RECV_BUF = 1 * 1024 * 1024;  // 接收缓冲区上限 1MB
-    static constexpr size_t MAX_CONTENT_LEN = 512 * 1024;     // Content-Length 上限 512KB
+    static constexpr size_t MAX_RECV_BUF = 1 * 1024 * 1024;
     auto last_activity_time = std::chrono::steady_clock::now();
 
     while (running_ && !sess.send_failed) {
@@ -706,14 +610,12 @@ void RtspServer::handle_client(int fd, const std::string& client_ip) {
             recv_buf.append(buf, n);
             last_activity_time = std::chrono::steady_clock::now();
 
-            // 防止恶意客户端导致 OOM
             if (recv_buf.size() > MAX_RECV_BUF) {
                 SPDLOG_WARN("RTSP: recv_buf exceeded {}MB limit, closing connection", MAX_RECV_BUF / 1024 / 1024);
                 goto cleanup;
             }
         }
 
-        // 所有阶段都检测超时，防止连接挂起
         auto now = std::chrono::steady_clock::now();
         auto idle_seconds = std::chrono::duration_cast<std::chrono::seconds>(now - last_activity_time).count();
         if (sess.client_playing && idle_seconds > 60) {
@@ -760,14 +662,13 @@ cleanup:
     if (sess.rtp_thread.joinable()) sess.rtp_thread.join();
     if (sess.audio_rtp_thread.joinable()) sess.audio_rtp_thread.join();
 
-    if (sess.frame_queue && camera_) {
-        camera_->remove_client_queue(sess.frame_queue);
+    if (sess.frame_slot && camera_) {
+        camera_->remove_client_queue(sess.frame_slot);
     }
-    if (sess.audio_frame_queue && audio_) {
-        audio_->remove_client_queue(sess.audio_frame_queue);
+    if (sess.audio_frame_slot && audio_) {
+        audio_->remove_client_queue(sess.audio_frame_slot);
     }
 
-    // 安全关闭 fd：先标记，再加锁关闭，防止 RTP 线程在 close 后使用 fd
     sess.fd_closed = true;
     {
         std::lock_guard<std::mutex> lock(sess.fd_mutex);
@@ -778,19 +679,17 @@ cleanup:
     SPDLOG_INFO("RTSP client {} disconnected", client_ip);
 }
 
-// ---------------------------------------------------------------------------
-// RTP streaming (TCP interleaved)
-// ---------------------------------------------------------------------------
-
 void RtspServer::send_rtp_stream_tcp(int fd, int channel,
     std::function<void(int, const uint8_t*, size_t)> send_fn,
     std::atomic<bool>& client_playing, std::atomic<bool>& rtp_running,
-    std::shared_ptr<MessageQueue<std::shared_ptr<Frame>>> frame_queue) {
+    std::shared_ptr<LatestValue<Frame>> frame_slot) {
 
     uint16_t seq = 0;
-    uint32_t timestamp = 0;
     std::random_device rd;
     uint32_t ssrc = rd();
+    uint32_t timestamp = 0;
+    uint32_t start_rtp_timestamp = 0;
+    bool first_frame = true;
 
     uint32_t packet_count = 0;
     uint32_t octet_count = 0;
@@ -864,48 +763,46 @@ void RtspServer::send_rtp_stream_tcp(int fd, int channel,
 
     std::shared_ptr<Frame> frame_ptr;
     int frame_count = 0;
+    uint64_t last_seq = 0;
 
     while (running_ && client_playing && rtp_running) {
-        bool got = frame_queue->pop_move(frame_ptr, 100);
-        if (!got || !frame_ptr || frame_ptr->data.empty()) continue;
-
-        frame_ptr->t_rtp_send = wall_clock_us();
+        frame_ptr = frame_slot->get(last_seq, 100);
+        if (!frame_ptr || frame_ptr->data.empty()) continue;
 
         extract_sps_pps(frame_ptr->data.data(), frame_ptr->data.size());
 
         auto nals = parse_nals(frame_ptr->data.data(), frame_ptr->data.size());
+
+        uint32_t frame_rtp_ts = static_cast<uint32_t>(frame_ptr->timestamp * 90000ULL / 1000000ULL);
+        if (first_frame) {
+            start_rtp_timestamp = frame_rtp_ts;
+            first_frame = false;
+            SPDLOG_INFO("RTP TCP session start: initial ts={}", start_rtp_timestamp);
+        }
+        timestamp = frame_rtp_ts - start_rtp_timestamp;
 
         for (size_t n = 0; n < nals.size(); n++) {
             bool is_last = (n == nals.size() - 1);
             send_nal(nals[n].first, nals[n].second, is_last);
         }
 
-        timestamp = static_cast<uint32_t>(frame_ptr->timestamp * 90000ULL / 1000000ULL);
         frame_count++;
 
-        LatencyLogger::instance().log(*frame_ptr);
-
-        //每5秒发送一次视频RTCP Sender Report
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_sr_time).count();
         if (elapsed >= 5) {
             uint64_t ntp_ts = get_ntp_timestamp();
             send_rtcp_sr_tcp(send_fn, 1, ssrc, ntp_ts, timestamp, packet_count, octet_count);
             last_sr_time = now;
-            SPDLOG_DEBUG("Video RTCP SR sent (TCP): ssrc={}, pkt_count={}, oct_count={}", ssrc, packet_count, octet_count);
         }
     }
 
     SPDLOG_INFO("RTP TCP streaming stopped after {} frames", frame_count);
 }
 
-// ---------------------------------------------------------------------------
-// RTP streaming (UDP)
-// ---------------------------------------------------------------------------
-
 void RtspServer::send_rtp_stream(int rtp_sock, const std::string& client_ip, int client_rtp_port,
     std::atomic<bool>& client_playing, std::atomic<bool>& rtp_running,
-    std::shared_ptr<MessageQueue<std::shared_ptr<Frame>>> frame_queue) {
+    std::shared_ptr<LatestValue<Frame>> frame_slot) {
 
     struct sockaddr_in dest = {};
     dest.sin_family = AF_INET;
@@ -921,12 +818,14 @@ void RtspServer::send_rtp_stream(int rtp_sock, const std::string& client_ip, int
     uint32_t timestamp = 0;
     std::random_device rd;
     uint32_t ssrc = rd();
+    uint32_t start_rtp_timestamp = 0;
+    bool first_frame = true;
 
     uint32_t packet_count = 0;
     uint32_t octet_count = 0;
     auto last_sr_time = std::chrono::steady_clock::now();
     int udp_send_errors = 0;
-    static constexpr int MAX_UDP_ERRORS = 100;  // 连续发送失败上限，超过则断开
+    static constexpr int MAX_UDP_ERRORS = 100;
 
     auto send_nal = [&](const uint8_t* nal_data, size_t nal_size, bool marker) {
         const size_t max_payload = 1400;
@@ -1018,28 +917,31 @@ void RtspServer::send_rtp_stream(int rtp_sock, const std::string& client_ip, int
 
     std::shared_ptr<Frame> frame_ptr;
     int frame_count = 0;
+    uint64_t last_seq = 0;
 
     while (running_ && client_playing && rtp_running) {
-        bool got = frame_queue->pop_move(frame_ptr, 100);
-        if (!got || !frame_ptr || frame_ptr->data.empty()) continue;
-
-        frame_ptr->t_rtp_send = wall_clock_us();
+        frame_ptr = frame_slot->get(last_seq, 100);
+        if (!frame_ptr || frame_ptr->data.empty()) continue;
 
         extract_sps_pps(frame_ptr->data.data(), frame_ptr->data.size());
 
         auto nals = parse_nals(frame_ptr->data.data(), frame_ptr->data.size());
+
+        uint32_t frame_rtp_ts = static_cast<uint32_t>(frame_ptr->timestamp * 90000ULL / 1000000ULL);
+        if (first_frame) {
+            start_rtp_timestamp = frame_rtp_ts;
+            first_frame = false;
+            SPDLOG_INFO("RTP UDP session start: initial ts={}", start_rtp_timestamp);
+        }
+        timestamp = frame_rtp_ts - start_rtp_timestamp;
 
         for (size_t n = 0; n < nals.size(); n++) {
             bool is_last = (n == nals.size() - 1);
             send_nal(nals[n].first, nals[n].second, is_last);
         }
 
-        timestamp = static_cast<uint32_t>(frame_ptr->timestamp * 90000ULL / 1000000ULL);
         frame_count++;
 
-        LatencyLogger::instance().log(*frame_ptr);
-
-        //每5秒发送一次视频RTCP Sender Report
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_sr_time).count();
         if (elapsed >= 5) {
@@ -1048,44 +950,32 @@ void RtspServer::send_rtp_stream(int rtp_sock, const std::string& client_ip, int
             sendto(rtp_sock, sr_pkt.data(), sr_pkt.size(), 0,
                    (struct sockaddr*)&rtcp_dest, sizeof(rtcp_dest));
             last_sr_time = now;
-            SPDLOG_DEBUG("Video RTCP SR sent: ssrc={}, pkt_count={}, oct_count={}", ssrc, packet_count, octet_count);
         }
     }
 
     SPDLOG_INFO("RTP UDP streaming stopped after {} frames", frame_count);
 }
 
-// ---------------------------------------------------------------------------
-// RTCP Sender Report
-// ---------------------------------------------------------------------------
-
-//获取当前NTP时间戳（秒+小数秒，各32位）
 static uint64_t get_ntp_timestamp() {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
-    uint64_t ntp_sec = static_cast<uint64_t>(ts.tv_sec) + 2208988800ULL; // Unix epoch -> NTP epoch
+    uint64_t ntp_sec = static_cast<uint64_t>(ts.tv_sec) + 2208988800ULL;
     uint64_t ntp_frac = static_cast<uint64_t>(ts.tv_nsec) * (1ULL << 32) / 1000000000ULL;
     return (ntp_sec << 32) | ntp_frac;
 }
 
-//构造RTCP Sender Report包（RFC 3550 Section 6.4.1）
 static std::vector<uint8_t> build_rtcp_sr(uint32_t ssrc, uint64_t ntp_timestamp,
-                                           uint32_t rtp_timestamp,
-                                           uint32_t packet_count, uint32_t octet_count) {
+                                            uint32_t rtp_timestamp,
+                                            uint32_t packet_count, uint32_t octet_count) {
     std::vector<uint8_t> pkt(28);
-    // V=2, P=0, RC=0
     pkt[0] = 0x80;
-    // PT=200 (SR)
     pkt[1] = 200;
-    // length = 6 (28字节 - 4字节头) / 4 = 6
     pkt[2] = 0;
     pkt[3] = 6;
-    // SSRC
     pkt[4] = (ssrc >> 24) & 0xFF;
     pkt[5] = (ssrc >> 16) & 0xFF;
     pkt[6] = (ssrc >> 8) & 0xFF;
     pkt[7] = ssrc & 0xFF;
-    // NTP timestamp (64-bit)
     pkt[8] = (ntp_timestamp >> 56) & 0xFF;
     pkt[9] = (ntp_timestamp >> 48) & 0xFF;
     pkt[10] = (ntp_timestamp >> 40) & 0xFF;
@@ -1094,33 +984,19 @@ static std::vector<uint8_t> build_rtcp_sr(uint32_t ssrc, uint64_t ntp_timestamp,
     pkt[13] = (ntp_timestamp >> 16) & 0xFF;
     pkt[14] = (ntp_timestamp >> 8) & 0xFF;
     pkt[15] = ntp_timestamp & 0xFF;
-    // RTP timestamp
     pkt[16] = (rtp_timestamp >> 24) & 0xFF;
     pkt[17] = (rtp_timestamp >> 16) & 0xFF;
     pkt[18] = (rtp_timestamp >> 8) & 0xFF;
     pkt[19] = rtp_timestamp & 0xFF;
-    // sender's packet count
     pkt[20] = (packet_count >> 24) & 0xFF;
     pkt[21] = (packet_count >> 16) & 0xFF;
     pkt[22] = (packet_count >> 8) & 0xFF;
     pkt[23] = packet_count & 0xFF;
-    // sender's octet count
     pkt[24] = (octet_count >> 24) & 0xFF;
     pkt[25] = (octet_count >> 16) & 0xFF;
     pkt[26] = (octet_count >> 8) & 0xFF;
     pkt[27] = octet_count & 0xFF;
     return pkt;
-}
-
-void RtspServer::send_rtcp_sr(int sock, const std::string& client_ip, int client_rtcp_port,
-    uint32_t ssrc, uint64_t ntp_timestamp, uint32_t rtp_timestamp,
-    uint32_t packet_count, uint32_t octet_count) {
-    auto pkt = build_rtcp_sr(ssrc, ntp_timestamp, rtp_timestamp, packet_count, octet_count);
-    struct sockaddr_in dest = {};
-    dest.sin_family = AF_INET;
-    dest.sin_port = htons(client_rtcp_port);
-    inet_pton(AF_INET, client_ip.c_str(), &dest.sin_addr);
-    sendto(sock, pkt.data(), pkt.size(), 0, (struct sockaddr*)&dest, sizeof(dest));
 }
 
 void RtspServer::send_rtcp_sr_tcp(std::function<void(int, const uint8_t*, size_t)> send_fn,
@@ -1130,13 +1006,9 @@ void RtspServer::send_rtcp_sr_tcp(std::function<void(int, const uint8_t*, size_t
     send_fn(rtcp_channel, pkt.data(), pkt.size());
 }
 
-// ---------------------------------------------------------------------------
-// 音频 RTP streaming (UDP)
-// ---------------------------------------------------------------------------
-
 void RtspServer::send_audio_rtp_stream(int rtp_sock, const std::string& client_ip, int client_rtp_port,
     std::atomic<bool>& client_playing, std::atomic<bool>& audio_rtp_running,
-    std::shared_ptr<MessageQueue<std::shared_ptr<AudioFrame>>> audio_frame_queue) {
+    std::shared_ptr<LatestValue<AudioFrame>> audio_frame_slot) {
 
     struct sockaddr_in dest = {};
     dest.sin_family = AF_INET;
@@ -1164,19 +1036,20 @@ void RtspServer::send_audio_rtp_stream(int rtp_sock, const std::string& client_i
 
     std::shared_ptr<AudioFrame> frame_ptr;
     int frame_count = 0;
+    uint64_t last_seq = 0;
 
     while (running_ && client_playing && audio_rtp_running) {
-        bool got = audio_frame_queue->pop_move(frame_ptr, 100);
-        if (!got || !frame_ptr || frame_ptr->data.empty()) continue;
+        frame_ptr = audio_frame_slot->get(last_seq, 100);
+        if (!frame_ptr || frame_ptr->data.empty()) continue;
 
-        // 使用帧的绝对采集时间戳作为 RTP 时间戳基准（与视频一致）
         uint32_t frame_rtp_ts = static_cast<uint32_t>(frame_ptr->timestamp * 8 / 1000);
         if (first_frame) {
             start_rtp_timestamp = frame_rtp_ts;
             first_frame = false;
+            SPDLOG_INFO("Audio RTP UDP session start: initial ts={}", start_rtp_timestamp);
         }
+        uint32_t session_rtp_ts = frame_rtp_ts - start_rtp_timestamp;
 
-        //按160字节（20ms）切分G.711 PCMU数据
         const size_t max_audio_payload = 160;
         size_t offset = 0;
         uint32_t samples_offset = 0;
@@ -1185,12 +1058,10 @@ void RtspServer::send_audio_rtp_stream(int rtp_sock, const std::string& client_i
             size_t chunk = std::min(max_audio_payload, frame_ptr->data.size() - offset);
             bool marker = (offset + chunk >= frame_ptr->data.size());
 
-            uint32_t pkt_ts = frame_rtp_ts + samples_offset;
+            uint32_t pkt_ts = session_rtp_ts + samples_offset;
 
             uint8_t pkt[200];
-            //RTP头部：V=2, P=0, X=0, CC=0
             pkt[0] = 0x80;
-            //M=marker, PT=0 (PCMU)
             pkt[1] = (marker ? 0x80 : 0x00) | 0;
             pkt[2] = (seq >> 8) & 0xFF;
             pkt[3] = seq & 0xFF;
@@ -1225,32 +1096,25 @@ void RtspServer::send_audio_rtp_stream(int rtp_sock, const std::string& client_i
 
         frame_count++;
 
-        //每5秒发送一次RTCP Sender Report
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_sr_time).count();
         if (elapsed >= 5) {
             uint64_t ntp_ts = get_ntp_timestamp();
-            uint32_t rtp_ts = static_cast<uint32_t>(frame_ptr->timestamp * 8 / 1000);
-            //使用RTP socket发送RTCP SR到客户端RTCP端口
+            uint32_t rtp_ts = session_rtp_ts + samples_offset;
             auto sr_pkt = build_rtcp_sr(ssrc, ntp_ts, rtp_ts, packet_count, octet_count);
             sendto(rtp_sock, sr_pkt.data(), sr_pkt.size(), 0,
                    (struct sockaddr*)&rtcp_dest, sizeof(rtcp_dest));
             last_sr_time = now;
-            SPDLOG_DEBUG("Audio RTCP SR sent: ssrc={}, pkt_count={}, oct_count={}", ssrc, packet_count, octet_count);
         }
     }
 
     SPDLOG_INFO("Audio RTP UDP streaming stopped after {} frames", frame_count);
 }
 
-// ---------------------------------------------------------------------------
-// 音频 RTP streaming (TCP interleaved)
-// ---------------------------------------------------------------------------
-
 void RtspServer::send_audio_rtp_stream_tcp(int fd, int rtp_channel, int rtcp_channel,
     std::function<void(int, const uint8_t*, size_t)> send_fn,
     std::atomic<bool>& client_playing, std::atomic<bool>& audio_rtp_running,
-    std::shared_ptr<MessageQueue<std::shared_ptr<AudioFrame>>> audio_frame_queue) {
+    std::shared_ptr<LatestValue<AudioFrame>> audio_frame_slot) {
 
     uint16_t seq = 0;
     std::random_device rd;
@@ -1266,29 +1130,29 @@ void RtspServer::send_audio_rtp_stream_tcp(int fd, int rtp_channel, int rtcp_cha
 
     std::shared_ptr<AudioFrame> frame_ptr;
     int frame_count = 0;
+    uint64_t last_seq = 0;
 
     while (running_ && client_playing && audio_rtp_running) {
-        bool got = audio_frame_queue->pop_move(frame_ptr, 100);
-        if (!got || !frame_ptr || frame_ptr->data.empty()) continue;
+        frame_ptr = audio_frame_slot->get(last_seq, 100);
+        if (!frame_ptr || frame_ptr->data.empty()) continue;
 
-        // 使用帧的绝对采集时间戳作为 RTP 时间戳基准（与视频一致）
-        // 丢帧时时间戳会自然跳变，避免与 RTCP SR 的绝对时间戳撕裂
         uint32_t frame_rtp_ts = static_cast<uint32_t>(frame_ptr->timestamp * 8 / 1000);
         if (first_frame) {
             start_rtp_timestamp = frame_rtp_ts;
             first_frame = false;
+            SPDLOG_INFO("Audio RTP TCP session start: initial ts={}", start_rtp_timestamp);
         }
+        uint32_t session_rtp_ts = frame_rtp_ts - start_rtp_timestamp;
 
         const size_t max_audio_payload = 160;
         size_t offset = 0;
-        uint32_t samples_offset = 0;  // 帧内采样偏移
+        uint32_t samples_offset = 0;
 
         while (offset < frame_ptr->data.size()) {
             size_t chunk = std::min(max_audio_payload, frame_ptr->data.size() - offset);
             bool marker = (offset + chunk >= frame_ptr->data.size());
 
-            // 每个 RTP 包的时间戳 = 帧基准 + 帧内偏移
-            uint32_t pkt_ts = frame_rtp_ts + samples_offset;
+            uint32_t pkt_ts = session_rtp_ts + samples_offset;
 
             uint8_t pkt[200];
             pkt[0] = 0x80;
@@ -1315,15 +1179,13 @@ void RtspServer::send_audio_rtp_stream_tcp(int fd, int rtp_channel, int rtcp_cha
 
         frame_count++;
 
-        //每5秒发送一次RTCP Sender Report
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_sr_time).count();
         if (elapsed >= 5) {
             uint64_t ntp_ts = get_ntp_timestamp();
-            uint32_t rtp_ts = static_cast<uint32_t>(frame_ptr->timestamp * 8 / 1000);
+            uint32_t rtp_ts = session_rtp_ts + samples_offset;
             send_rtcp_sr_tcp(send_fn, rtcp_channel, ssrc, ntp_ts, rtp_ts, packet_count, octet_count);
             last_sr_time = now;
-            SPDLOG_DEBUG("Audio RTCP SR sent (TCP): ssrc={}, pkt_count={}, oct_count={}", ssrc, packet_count, octet_count);
         }
     }
 

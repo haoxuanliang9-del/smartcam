@@ -1,16 +1,21 @@
 system:
-  device_id: "CAM-001"
+  device_id: "CAM-VM-001"
   log_level: "info"
-  log_file: "/home/orangepi/smartcam/app.log"
+  log_file: "/tmp/smartcam/app.log"
   log_max_size_mb: 5
   log_max_files: 3
 
 camera:
-  video_file: "/home/orangepi/video.mp4"
-  bitrate_kbps: 1000
+  v4l2_device: "/dev/video0"
+  v4l2_width: 1280
+  v4l2_height: 720
+  v4l2_fps: 10
+  # YUYV 格式 1280x720@10fps，兼容性好，无需 MJPEG 硬件解码
+  v4l2_pix_fmt: "yuyv422"
+  bitrate_kbps: 2500
 
 sensor:
-  i2c_bus: 3
+  i2c_bus: 99
   i2c_addr: 0x38
   sample_interval_sec: 1
 
@@ -18,16 +23,18 @@ streaming:
   rtsp_port: 8554
   stream_name: "live"
   max_clients: 10
-  audio_device: "plughw:CARD=Loopback,DEV=0"
+  audio_device: "default"
+  audio_enabled: true
+  audio_volume: 4.0
 
 osd:
-  enabled: true
+  enabled: false
   font_size: 24
 
 display:
-  enabled: true
-  spi_device: "/dev/spidev1.0"
-  gpio_dc: 74
-  gpio_rst: 78
-  gpio_cs: 233
+  enabled: false
+  spi_device: "/dev/spidev0.0"
+  gpio_dc: 14
+  gpio_rst: 9
+  gpio_cs: 10
   refresh_sec: 1

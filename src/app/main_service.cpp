@@ -28,13 +28,6 @@ bool MainService::init(const std::string& config_path) {
     setup_modules();
     connect_callbacks();
 
-    /*优雅退出
-    signal用于注册信号处理器
-    SIGINT = 用户按 Ctrl+C 组合键
-    SIGTERM = kill 命令
-    即使没有注册这两个信号Ctrl+C和kill依然能够终止进程，但进程会立刻终止来不及释放资源，正确处理终止逻辑。
-    但是有了这两个信号处理器程序就能自己处理这两信号，安全的终止进程。
-    */
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
@@ -107,12 +100,21 @@ void MainService::run() {
         return;
     }
 
-    if (!audio_->init(config_.streaming.audio_device)) {
-        SPDLOG_WARN("Failed to initialize audio capture, continuing without audio");
+    if (config_.streaming.audio_enabled) {
+        if (audio_->init(config_.streaming.audio_device)) {
+            audio_->set_volume(config_.streaming.audio_volume);
+            SPDLOG_INFO("Audio volume gain: {:.1f}x", config_.streaming.audio_volume);
+        } else {
+            SPDLOG_WARN("Failed to initialize audio capture, continuing without audio");
+            audio_.reset();
+        }
+    } else {
+        SPDLOG_INFO("Audio disabled by config");
         audio_.reset();
     }
 
-    if (!sensor_->init(config_.sensor)) {
+    bool sensor_init_ok = sensor_->init(config_.sensor);
+    if (!sensor_init_ok) {
         SPDLOG_WARN("Failed to initialize sensor module, continuing without sensor");
     }
 
@@ -128,7 +130,7 @@ void MainService::run() {
 
     camera_->start();
     if (audio_) audio_->start();
-    sensor_->start();
+    if (sensor_init_ok) sensor_->start();
     if (display_) display_->start();
     rtsp_->start();
 
