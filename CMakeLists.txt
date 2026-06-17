@@ -53,6 +53,7 @@ set(SMARTCAM_SOURCES
     src/hal/spi_hal.cpp
     src/modules/camera/camera_capture.cpp
     src/modules/audio/audio_capture.cpp
+    src/modules/audio/audio_processor.cpp
     src/modules/sensor/sensor_module.cpp
     src/modules/display/oled_display.cpp
     src/modules/streaming/rtsp_server.cpp
