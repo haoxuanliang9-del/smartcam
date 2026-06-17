@@ -1,4 +1,6 @@
 #include "main_service.h"
+#include "modules/audio/audio_processor.h"
+#include "modules/video/video_processor.h"
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -98,6 +100,30 @@ void MainService::run() {
     if (!camera_->init(config_.camera, config_.osd)) {
         SPDLOG_ERROR("Failed to initialize camera module");
         return;
+    }
+
+    // Set up video enhancement processor
+    if (config_.video_enhance.enabled) {
+        video_processor_ = std::make_shared<VideoProcessor>();
+        if (video_processor_->init(config_.video_enhance)) {
+            camera_->set_video_processor(video_processor_);
+            SPDLOG_INFO("Video enhancement processor injected into camera pipeline");
+        } else {
+            SPDLOG_WARN("Video enhancement init failed, continuing without");
+            video_processor_.reset();
+        }
+    }
+
+    // Set up audio enhancement processor
+    if (config_.audio_enhance.enabled) {
+        audio_processor_ = std::make_shared<AudioProcessor>();
+        if (audio_processor_->init(config_.audio_enhance)) {
+            audio_->set_audio_processor(audio_processor_);
+            SPDLOG_INFO("Audio enhancement processor injected into audio pipeline");
+        } else {
+            SPDLOG_WARN("Audio enhancement init failed, continuing without");
+            audio_processor_.reset();
+        }
     }
 
     if (config_.streaming.audio_enabled) {

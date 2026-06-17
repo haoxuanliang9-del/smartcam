@@ -11,6 +11,12 @@
 #include <memory>
 #include <atomic>
 
+// Forward declarations
+namespace smartcam {
+class AudioProcessor;
+class VideoProcessor;
+}
+
 namespace smartcam {
 
 class MainService {
@@ -35,6 +41,10 @@ private:
     std::unique_ptr<SensorModule> sensor_;
     std::unique_ptr<OledDisplay> display_;
     std::unique_ptr<RtspServer> rtsp_;
+
+    // Enhancement processors (optional, config-driven)
+    std::shared_ptr<AudioProcessor> audio_processor_;
+    std::shared_ptr<VideoProcessor> video_processor_;
 
     std::atomic<bool> running_{false};
     std::atomic<uint32_t> latest_bitrate_kbps_{0};
