@@ -4,7 +4,6 @@
 #include "common/config.h"
 #include <cstdint>
 #include <cstddef>
-#include <memory>
 
 struct DenoiseState;
 
@@ -34,7 +33,6 @@ public:
 
 private:
     void agc_process(int16_t* samples, size_t count);
-    void rnnoise_process(float* frame, size_t count);
     void resample_48k_to_8k(const float* in, size_t in_count,
                             int16_t* out, size_t& out_count);
 

@@ -60,10 +60,10 @@ bool AudioProcessor::process(const int16_t* input, size_t input_samples,
     }
 
     if (!enabled_) {
-        // Bypass: just copy (shouldn't happen in normal operation —
+        // Bypass: output silence (shouldn't happen in normal operation —
         // AudioCapture won't call process() when disabled)
-        std::memcpy(output, input, input_samples * sizeof(int16_t));
-        output_samples = input_samples;
+        std::memset(output, 0, 80 * sizeof(int16_t));
+        output_samples = 80;
         return true;
     }
 
@@ -90,7 +90,7 @@ bool AudioProcessor::process(const int16_t* input, size_t input_samples,
     // Stage 2: RNNoise denoise
     {
         float rnnoise_out[480];
-        float vad = rnnoise_process_frame(rnnoise_state_, rnnoise_out, work);
+        rnnoise_process_frame(rnnoise_state_, rnnoise_out, work);
 
         // Soft mix: denoise_level controls blend between original and processed
         float level = std::clamp(cfg_.denoise_level, 0.0f, 1.0f);
@@ -139,14 +139,6 @@ void AudioProcessor::agc_process(int16_t* samples, size_t count) {
     }
 }
 
-void AudioProcessor::rnnoise_process(float* frame, size_t count) {
-    // RNNoise processes in-place via rnnoise_process_frame
-    // Already called in process() above — this is a no-op at this level.
-    // The actual RNNoise call is in process() for clarity.
-    (void)frame;
-    (void)count;
-}
-
 void AudioProcessor::resample_48k_to_8k(const float* in, size_t in_count,
                                          int16_t* out, size_t& out_count) {
     // Two-stage decimation: 48kHz → 24kHz (÷2) → 8kHz (÷3)
@@ -178,10 +170,7 @@ void AudioProcessor::resample_48k_to_8k(const float* in, size_t in_count,
         float s2 = (base + 1 < 240)           ? stage1[base + 1] : 0.0f;
         float sum = (s0 + 2.0f * s1 + s2) / 4.0f;
 
-        // Convert float (-1..1) to int16
-        float scaled = sum / 32768.0f; // RNNoise output is already int16-scale
-        // Actually stage1 values are in int16 range (-32768..32767),
-        // so convert directly
+        // Convert to int16 with clamping
         int32_t val = static_cast<int32_t>(sum);
         if (val > 32767) val = 32767;
         if (val < -32768) val = -32768;
