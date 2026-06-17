@@ -1,4 +1,5 @@
 #include "camera_capture.h"
+#include "modules/video/video_processor.h"
 #include <spdlog/spdlog.h>
 #include <time.h>
 
@@ -261,6 +262,14 @@ void CameraCapture::capture_loop() {
             SPDLOG_INFO("Forced IDR requested, next frame will be IDR");
         } else {
             yuv_frame_->pict_type = AV_PICTURE_TYPE_NONE;
+        }
+
+        // Apply video enhancement (CLAHE + denoise) before OSD overlay
+        if (video_processor_ && video_processor_->is_enabled()) {
+            video_processor_->process(
+                yuv_frame_->data[0], yuv_frame_->data[1], yuv_frame_->data[2],
+                static_cast<int>(width_), static_cast<int>(height_),
+                yuv_frame_->linesize[0], yuv_frame_->linesize[1]);
         }
 
         if (osd_config_.enabled && filter_graph_) {

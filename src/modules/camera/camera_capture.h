@@ -41,6 +41,12 @@ public:
     using BitrateCallback = std::function<void(uint32_t)>;
     void set_actual_bitrate_callback(BitrateCallback cb) { actual_bitrate_cb_ = std::move(cb); }
 
+    // Inject optional video processor (CLAHE + denoise).
+    // When set and enabled, frames are processed before OSD/encode.
+    void set_video_processor(std::shared_ptr<class VideoProcessor> processor) {
+        video_processor_ = std::move(processor);
+    }
+
     bool is_running() const { return running_; }
 
 private:
@@ -78,6 +84,9 @@ private:
 
     AVBSFContext* annexb_bsf_ = nullptr;
     std::atomic<bool> request_idr_{false};
+
+    // Enhanced video path (optional)
+    std::shared_ptr<class VideoProcessor> video_processor_;
 };
 
 } // namespace smartcam
