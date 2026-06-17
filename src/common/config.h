@@ -53,6 +53,24 @@ struct DisplayConfig {
     uint32_t refresh_sec = 1;
 };
 
+struct AudioEnhanceConfig {
+    bool enabled = false;
+    float agc_target_rms = 0.1f;       // -20dBFS
+    float agc_max_gain = 30.0f;        // +30dB max
+    float agc_attack_ms = 5.0f;
+    float agc_release_ms = 100.0f;
+    float denoise_level = 1.0f;        // 0.0=bypass, 1.0=max
+    std::string rnnoise_model;         // empty = built-in model
+};
+
+struct VideoEnhanceConfig {
+    bool enabled = false;
+    float clahe_clip_limit = 2.0f;
+    int clahe_tile_size = 8;
+    float denoise_h = 10.0f;           // 0 = bypass denoise
+    int denoise_skip_frames = 2;       // process every Nth frame
+};
+
 struct Config {
     SystemConfig system;
     CameraConfig camera;
@@ -60,6 +78,8 @@ struct Config {
     StreamingConfig streaming;
     OsdConfig osd;
     DisplayConfig display;
+    AudioEnhanceConfig audio_enhance;
+    VideoEnhanceConfig video_enhance;
 
     bool load(const std::string& path);
 };
