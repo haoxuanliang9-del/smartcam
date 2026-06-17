@@ -181,6 +181,12 @@ void MainService::shutdown() {
     if (display_) display_->stop();
     if (camera_) camera_->stop();
 
+    // Release enhancement processors while TLS is still valid.
+    // OpenCV's CLAHE Ptr accesses thread-local storage in its destructor;
+    // resetting here avoids a TLS-use-after-destroy crash during global cleanup.
+    video_processor_.reset();
+    audio_processor_.reset();
+
     SPDLOG_INFO("SmartCam service stopped");
 }
 
