@@ -4,8 +4,6 @@
 #include "common/config.h"
 #include "common/types.h"
 #include "hal/i2c_hal.h"
-#include "middleware/message_queue.h"
-#include <memory>
 #include <atomic>
 #include <functional>
 
@@ -13,7 +11,7 @@ namespace smartcam {
 
 class SensorModule {
 public:
-    explicit SensorModule(std::shared_ptr<MessageQueue<SensorData>> output_queue);
+    SensorModule() = default;
     ~SensorModule();
 
     bool init(const SensorConfig& config);
@@ -32,11 +30,9 @@ private:
     bool read_measurement(SensorData& data);
     bool check_calibration();
 
-    std::shared_ptr<MessageQueue<SensorData>> output_queue_;
     I2cHal i2c_hal_;
     SensorConfig config_;
     std::atomic<bool> running_{false};
-    SensorData last_data_{};
     DataCallback data_cb_;
 };
 

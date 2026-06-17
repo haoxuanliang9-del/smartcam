@@ -38,7 +38,6 @@ bool Config::load(const std::string& path) {
             auto n = root["streaming"];
             if (n["rtsp_port"]) streaming.rtsp_port = n["rtsp_port"].as<uint16_t>();
             if (n["stream_name"]) streaming.stream_name = n["stream_name"].as<std::string>();
-            if (n["max_clients"]) streaming.max_clients = n["max_clients"].as<uint32_t>();
             if (n["audio_device"]) streaming.audio_device = n["audio_device"].as<std::string>();
             if (n["audio_enabled"]) streaming.audio_enabled = n["audio_enabled"].as<bool>();
             if (n["audio_volume"]) streaming.audio_volume = n["audio_volume"].as<float>();

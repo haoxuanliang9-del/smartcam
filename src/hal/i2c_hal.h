@@ -3,7 +3,6 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
 
 namespace smartcam {
 
@@ -23,9 +22,6 @@ public:
 
     bool write(const uint8_t* data, size_t len);
     bool read(uint8_t* data, size_t len);
-
-    bool write_register(uint8_t reg, const uint8_t* data, size_t len);
-    bool read_register(uint8_t reg, uint8_t* data, size_t len);
 
 private:
     int fd_ = -1;

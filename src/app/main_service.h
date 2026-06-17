@@ -2,7 +2,6 @@
 #define SMARTCAM_APP_MAIN_SERVICE_H
 
 #include "common/config.h"
-#include "middleware/message_queue.h"
 #include "modules/camera/camera_capture.h"
 #include "modules/audio/audio_capture.h"
 #include "modules/sensor/sensor_module.h"
@@ -34,7 +33,6 @@ private:
     void connect_callbacks();
 
     Config config_;
-    std::shared_ptr<MessageQueue<SensorData>> sensor_queue_ = std::make_shared<MessageQueue<SensorData>>(64);
 
     std::shared_ptr<CameraCapture> camera_;
     std::shared_ptr<AudioCapture> audio_;

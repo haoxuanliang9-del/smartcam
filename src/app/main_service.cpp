@@ -68,7 +68,7 @@ void MainService::setup_logging() {
 void MainService::setup_modules() {
     camera_ = std::make_shared<CameraCapture>();
     audio_ = std::make_shared<AudioCapture>();
-    sensor_ = std::make_unique<SensorModule>(sensor_queue_);
+    sensor_ = std::make_unique<SensorModule>();
     rtsp_ = std::make_unique<RtspServer>();
     rtsp_->set_camera(camera_);
     rtsp_->set_audio(audio_);
@@ -142,6 +142,7 @@ void MainService::run() {
     bool sensor_init_ok = sensor_->init(config_.sensor);
     if (!sensor_init_ok) {
         SPDLOG_WARN("Failed to initialize sensor module, continuing without sensor");
+        sensor_.reset();
     }
 
     if (display_ && !display_->init(config_.display)) {

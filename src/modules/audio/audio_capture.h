@@ -3,7 +3,7 @@
 
 #include "common/config.h"
 #include "common/types.h"
-#include "middleware/message_queue.h"
+#include "middleware/latest_value.h"
 #include <memory>
 #include <atomic>
 #include <thread>
@@ -30,7 +30,6 @@ public:
 
     // 设置音频软件增益（1.0 = 不放大，4.0 ≈ +12dB）
     void set_volume(float volume) { volume_ = volume; }
-    float volume() const { return volume_.load(); }
 
     // Inject optional audio processor (AGC + RNNoise + resample).
     // When set and enabled, ALSA opens at 48kHz; processor converts to 8kHz.

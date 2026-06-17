@@ -11,9 +11,6 @@ static constexpr uint8_t AHT20_CMD_MEASURE[]     = {0xAC, 0x33, 0x00};
 static constexpr uint8_t AHT20_CMD_RESET[]       = {0xBA};
 static constexpr uint8_t AHT20_CMD_CALIBRATE[]   = {0xE1, 0x08, 0x00};
 
-SensorModule::SensorModule(std::shared_ptr<MessageQueue<SensorData>> output_queue)
-    : output_queue_(std::move(output_queue)) {}
-
 SensorModule::~SensorModule() {
     stop();
 }
@@ -57,6 +54,7 @@ void SensorModule::start() {
 }
 
 void SensorModule::stop() {
+    if (!running_) return;
     running_ = false;
     SPDLOG_INFO("SensorModule stopped");
 }
@@ -64,10 +62,8 @@ void SensorModule::stop() {
 void SensorModule::sample_loop() {
     while (running_) {
         SensorData data;
-        if (read(data)) {
-            last_data_ = data;
-            output_queue_->push(data);
-            if (data_cb_) data_cb_(data.temperature, data.humidity);
+        if (read(data) && data_cb_) {
+            data_cb_(data.temperature, data.humidity);
         }
 
         std::this_thread::sleep_for(

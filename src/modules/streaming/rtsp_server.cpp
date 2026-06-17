@@ -15,8 +15,6 @@
 #include <algorithm>
 #include <random>
 #include <sys/select.h>
-#include <ctime>
-#include <fstream>
 #include <time.h>
 #include <poll.h>
 
@@ -92,7 +90,6 @@ void RtspServer::stop() {
     running_ = false;
     if (server_fd_ >= 0) { shutdown(server_fd_, SHUT_RDWR); close(server_fd_); server_fd_ = -1; }
     if (accept_thread_.joinable()) accept_thread_.join();
-    client_threads_.clear();
     SPDLOG_INFO("RTSP server stopped");
 }
 
@@ -491,8 +488,7 @@ void RtspServer::handle_play(ClientSession& sess, const std::string& cseq) {
     send_response(sess, 200, cseq,
         "Session: " + sess.session_id + "\r\nRange: npt=0.000-\r\n", "");
 
-    if (!sess.playing) {
-        sess.playing = true;
+    if (!sess.client_playing) {
         sess.client_playing = true;
         sess.rtp_running = true;
 
@@ -554,7 +550,6 @@ void RtspServer::handle_teardown(ClientSession& sess, const std::string& cseq) {
     sess.client_playing = false;
     sess.rtp_running = false;
     sess.audio_rtp_running = false;
-    sess.playing = false;
 
     if (sess.frame_slot && camera_) {
         camera_->remove_client_queue(sess.frame_slot);

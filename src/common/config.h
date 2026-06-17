@@ -33,7 +33,6 @@ struct SensorConfig {
 struct StreamingConfig {
     uint16_t rtsp_port = 8554;
     std::string stream_name = "live";
-    uint32_t max_clients = 10;
     std::string audio_device = "plughw:0,0";
     bool audio_enabled = true;
     float audio_volume = 1.0f;

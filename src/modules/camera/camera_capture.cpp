@@ -1,7 +1,6 @@
 #include "camera_capture.h"
 #include "modules/video/video_processor.h"
 #include <spdlog/spdlog.h>
-#include <time.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -19,6 +18,7 @@ extern "C" {
 #include <cstring>
 #include <unistd.h>
 #include <algorithm>
+#include <fstream>
 
 namespace smartcam {
 
@@ -342,7 +342,6 @@ bool CameraCapture::encode_frame(AVFrame* frame, uint32_t frame_seq, uint64_t ca
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_bitrate_time_).count();
         if (elapsed >= 2) {
             uint32_t kbps = static_cast<uint32_t>((bytes_encoded_ * 8) / (elapsed * 1000));
-            actual_bitrate_kbps_ = kbps;
             bytes_encoded_ = 0;
             last_bitrate_time_ = now;
             SPDLOG_INFO("Actual bitrate: {} kbps", kbps);
@@ -352,6 +351,7 @@ bool CameraCapture::encode_frame(AVFrame* frame, uint32_t frame_seq, uint64_t ca
         auto shared_frame = std::make_shared<Frame>(std::move(output));
 
         {
+            std::lock_guard<std::mutex> lock(queues_mutex_);
             for (auto& slot : client_slots_) {
                 slot->put(shared_frame);
             }

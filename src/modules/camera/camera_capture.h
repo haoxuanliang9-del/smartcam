@@ -4,11 +4,10 @@
 #include "common/config.h"
 #include "common/types.h"
 #include "hal/v4l2_source.h"
-#include "middleware/message_queue.h"
+#include "middleware/latest_value.h"
 #include <functional>
 #include <memory>
 #include <atomic>
-#include <fstream>
 #include <vector>
 #include <mutex>
 
@@ -80,7 +79,6 @@ private:
     BitrateCallback actual_bitrate_cb_;
     std::atomic<uint64_t> bytes_encoded_{0};
     std::chrono::steady_clock::time_point last_bitrate_time_;
-    std::atomic<uint32_t> actual_bitrate_kbps_{0};
 
     AVBSFContext* annexb_bsf_ = nullptr;
     std::atomic<bool> request_idr_{false};

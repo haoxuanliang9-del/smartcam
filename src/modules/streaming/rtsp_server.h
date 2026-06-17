@@ -3,7 +3,7 @@
 
 #include "common/config.h"
 #include "common/types.h"
-#include "middleware/message_queue.h"
+#include "middleware/latest_value.h"
 #include <memory>
 #include <string>
 #include <atomic>
@@ -27,7 +27,6 @@ struct ClientSession {
     int server_rtp_port = 0;
     int server_rtcp_port = 0;
     int rtp_sock = -1;
-    bool playing = false;
     bool tcp_interleaved = false;
     int rtp_channel = 0;
     int rtcp_channel = 1;
@@ -115,7 +114,6 @@ private:
     int server_fd_ = -1;
     std::atomic<bool> running_{false};
     std::thread accept_thread_;
-    std::vector<std::thread> client_threads_;
 
     mutable std::mutex sps_mutex_;
     std::vector<uint8_t> sps_data_;

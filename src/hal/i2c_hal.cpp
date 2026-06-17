@@ -4,7 +4,6 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <linux/i2c-dev.h>
-#include <cstring>
 #include <errno.h>
 
 namespace smartcam {
@@ -57,18 +56,6 @@ bool I2cHal::read(uint8_t* data, size_t len) {
         return false;
     }
     return true;
-}
-
-bool I2cHal::write_register(uint8_t reg, const uint8_t* data, size_t len) {
-    std::vector<uint8_t> buf(len + 1);
-    buf[0] = reg;
-    std::memcpy(buf.data() + 1, data, len);
-    return write(buf.data(), buf.size());
-}
-
-bool I2cHal::read_register(uint8_t reg, uint8_t* data, size_t len) {
-    if (!write(&reg, 1)) return false;
-    return read(data, len);
 }
 
 } // namespace smartcam
