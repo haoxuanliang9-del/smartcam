@@ -164,6 +164,18 @@ void AudioCapture::capture_loop() {
             // Noise gate (threshold lowered to 300 since RNNoise handles noise now)
             const int16_t noise_gate = 300;
             int16_t peak = 0;
+
+            // Apply user-configured software gain
+            float vol = volume_.load();
+            if (vol != 1.0f) {
+                for (size_t i = 0; i < out_samples; i++) {
+                    int32_t s = static_cast<int32_t>(pcm_8k[i] * vol);
+                    if (s > 32767) s = 32767;
+                    if (s < -32768) s = -32768;
+                    pcm_8k[i] = static_cast<int16_t>(s);
+                }
+            }
+
             for (size_t i = 0; i < out_samples; i++) {
                 int16_t a = pcm_8k[i] >= 0 ? pcm_8k[i] : -pcm_8k[i];
                 if (a > peak) peak = a;

@@ -50,7 +50,7 @@ bool VideoProcessor::process(uint8_t* y_data, uint8_t* u_data, uint8_t* v_data,
 
     // ── NLMeans denoise (skip-frame) ──
     if (cfg_.denoise_h > 0.0f) {
-        int skip = cfg_.denoise_skip_frames + 1; // skip_frames=2 → every 3rd frame
+        int skip = std::max(1, cfg_.denoise_skip_frames + 1); // skip_frames=2 → every 3rd frame, min 1
         if ((frame_count_ % skip) == 0) {
             // Build BGR from YUV for colored denoising
             cv::Mat y_full(height, width, CV_8UC1, y_data, y_stride);
@@ -79,9 +79,11 @@ bool VideoProcessor::process(uint8_t* y_data, uint8_t* u_data, uint8_t* v_data,
             // Convert back to YUV
             cv::Mat yuv_denoised;
             cv::cvtColor(bgr_denoised, yuv_denoised, cv::COLOR_BGR2YUV);
-            cv::Mat y_denoised, u_denoised_full, v_denoised_full;
-            cv::Mat split_channels[3] = {y_denoised, u_denoised_full, v_denoised_full};
-            cv::split(yuv_denoised, split_channels);
+            cv::Mat channels[3];
+            cv::split(yuv_denoised, channels);
+            cv::Mat& y_denoised = channels[0];
+            cv::Mat& u_denoised_full = channels[1];
+            cv::Mat& v_denoised_full = channels[2];
 
             // Write Y back (full res) — row-by-row respecting stride
             for (int r = 0; r < height; r++) {
