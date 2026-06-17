@@ -27,6 +27,18 @@ pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
 find_package(yaml-cpp REQUIRED)
 find_package(spdlog REQUIRED)
 
+# OpenCV — optional, for video enhancement
+option(ENABLE_VIDEO_ENHANCE "Enable OpenCV-based video enhancement" ON)
+if(ENABLE_VIDEO_ENHANCE)
+    find_package(OpenCV QUIET COMPONENTS core imgproc photo)
+    if(OpenCV_FOUND)
+        add_compile_definitions(HAS_OPENCV)
+        message(STATUS "OpenCV found: video enhancement enabled")
+    else()
+        message(STATUS "OpenCV NOT found: video enhancement will be a no-op stub")
+    endif()
+endif()
+
 include_directories(
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/third_party/concurrentqueue
@@ -52,6 +64,7 @@ set(SMARTCAM_SOURCES
     src/hal/i2c_hal.cpp
     src/hal/spi_hal.cpp
     src/modules/camera/camera_capture.cpp
+    src/modules/video/video_processor.cpp
     src/modules/audio/audio_capture.cpp
     src/modules/audio/audio_processor.cpp
     src/modules/sensor/sensor_module.cpp
@@ -82,6 +95,10 @@ target_link_libraries(smartcam
 target_include_directories(smartcam PRIVATE
     ${FFMPEG_INCLUDE_DIRS}
 )
+
+if(OpenCV_FOUND)
+    target_link_libraries(smartcam ${OpenCV_LIBS})
+endif()
 
 install(TARGETS smartcam DESTINATION bin)
 install(DIRECTORY config/ DESTINATION /etc/smartcam)
