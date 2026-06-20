@@ -265,12 +265,10 @@ void CameraCapture::capture_loop() {
         }
 
         // Apply video enhancement (CLAHE + denoise) before OSD overlay
-        if (video_processor_ && video_processor_->is_enabled()) {
-            video_processor_->process(
-                yuv_frame_->data[0], yuv_frame_->data[1], yuv_frame_->data[2],
-                static_cast<int>(width_), static_cast<int>(height_),
-                yuv_frame_->linesize[0], yuv_frame_->linesize[1]);
-        }
+        video_processor_->process(
+            yuv_frame_->data[0], yuv_frame_->data[1], yuv_frame_->data[2],
+            static_cast<int>(width_), static_cast<int>(height_),
+            yuv_frame_->linesize[0], yuv_frame_->linesize[1]);
 
         if (osd_config_.enabled && filter_graph_) {
             if (av_buffersrc_add_frame_flags(buffersrc_ctx_, yuv_frame_,

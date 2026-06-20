@@ -40,7 +40,7 @@ private:
     std::unique_ptr<OledDisplay> display_;
     std::unique_ptr<RtspServer> rtsp_;
 
-    // Enhancement processors (optional, config-driven)
+    // Enhancement processors (always created)
     std::shared_ptr<AudioProcessor> audio_processor_;
     std::shared_ptr<VideoProcessor> video_processor_;
 

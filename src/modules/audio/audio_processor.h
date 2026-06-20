@@ -26,8 +26,6 @@ public:
     bool process(const int16_t* input, size_t input_samples,
                  int16_t* output, size_t& output_samples);
 
-    bool is_enabled() const { return enabled_; }
-
     void set_denoise_level(float level);
     void set_agc_target(float level);
 
@@ -37,7 +35,6 @@ private:
                             int16_t* out, size_t& out_count);
 
     AudioEnhanceConfig cfg_;
-    bool enabled_ = false;
     DenoiseState* rnnoise_state_ = nullptr;
 
     // AGC state

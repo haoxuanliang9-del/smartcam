@@ -8,34 +8,12 @@
 
 namespace smartcam {
 
-// ITU-T G.711 μ-law 编码查表 (13段折线, 8位编码)
-// 将 14-bit 有符号线性值编码为 8-bit μ-law
-static const uint8_t ulaw_table[256] = {
-    0,0,1,1,2,2,2,2,3,3,3,3,3,3,3,3,
-    4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,
-    5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
-    5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
-    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-    6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7
-};
-
+// ITU-T G.711 μ-law encoding
 uint8_t AudioCapture::pcmu_encode(int16_t sample) {
-    // μ-law 编码算法 (RFC 3551 / ITU-T G.711)
     int sign = (sample >> 8) & 0x80;
     if (sign) sample = -sample;
     if (sample > 32635) sample = 32635;
 
-    // 将 14-bit 线性值转换为 8-bit μ-law
     int exponent = 7;
     for (int exp = 7; exp > 0; exp--) {
         if (sample & (1 << (exp + 6))) {
@@ -55,26 +33,13 @@ AudioCapture::~AudioCapture() {
 bool AudioCapture::init(const std::string& device) {
     device_ = device;
 
-    // Determine sample rate: 48kHz if enhanced path, else 8kHz
-    unsigned int rate;
-    snd_pcm_uframes_t period_size;
-
-    if (audio_processor_ && audio_processor_->is_enabled()) {
-        rate = 48000;
-        period_size = 480; // 10ms @ 48kHz
-        use_enhanced_path_ = true;
-        SPDLOG_INFO("AudioCapture: using 48kHz enhanced path");
-    } else {
-        rate = 8000;
-        period_size = 160; // 20ms @ 8kHz
-        use_enhanced_path_ = false;
-        SPDLOG_INFO("AudioCapture: using 8kHz legacy path");
-    }
+    // Always 48kHz — AudioProcessor handles downsampling to 8kHz for PCMU
+    unsigned int rate = 48000;
+    snd_pcm_uframes_t period_size = 480; // 10ms @ 48kHz
 
     int err = snd_pcm_open(&pcm_, device_.c_str(), SND_PCM_STREAM_CAPTURE, 0);
     if (err < 0) {
         SPDLOG_ERROR("AudioCapture: cannot open ALSA device '{}': {}", device_, snd_strerror(err));
-        use_enhanced_path_ = false;
         return false;
     }
 
@@ -99,14 +64,13 @@ bool AudioCapture::init(const std::string& device) {
         SPDLOG_ERROR("AudioCapture: cannot set hw params: {}", snd_strerror(err));
         snd_pcm_close(pcm_);
         pcm_ = nullptr;
-        use_enhanced_path_ = false;
         return false;
     }
 
     snd_pcm_prepare(pcm_);
 
-    SPDLOG_INFO("AudioCapture initialized: device={}, rate={}, channels=1, period={}",
-                device_, rate, period_near);
+    SPDLOG_INFO("AudioCapture initialized: device={}, rate=48000, channels=1, period={}",
+                device_, period_near);
     return true;
 }
 
@@ -129,143 +93,77 @@ void AudioCapture::stop() {
 }
 
 void AudioCapture::capture_loop() {
-    if (use_enhanced_path_) {
-        // ── Enhanced path: 48kHz capture → AudioProcessor → 8kHz → noise gate → PCMU ──
-        const int period_frames_48k = 480;   // 10ms @ 48kHz
-        const int period_frames_8k = 80;     // 10ms @ 8kHz
-        std::vector<int16_t> pcm_48k(period_frames_48k);
-        std::vector<int16_t> pcm_8k(period_frames_8k);
-        std::vector<uint8_t> ulaw_buf(period_frames_8k);
+    // 48kHz capture → AudioProcessor (AGC+RNNoise+resample) → 8kHz → noise gate → PCMU
+    const int period_frames_48k = 480;   // 10ms @ 48kHz
+    const int period_frames_8k = 80;     // 10ms @ 8kHz
+    std::vector<int16_t> pcm_48k(period_frames_48k);
+    std::vector<int16_t> pcm_8k(period_frames_8k);
+    std::vector<uint8_t> ulaw_buf(period_frames_8k);
 
-        const uint32_t sample_rate = 8000;
-        uint64_t total_samples = 0;
+    const uint32_t sample_rate = 8000;
+    uint64_t total_samples = 0;
 
-        while (running_) {
-            snd_pcm_sframes_t frames = snd_pcm_readi(pcm_, pcm_48k.data(), period_frames_48k);
+    while (running_) {
+        snd_pcm_sframes_t frames = snd_pcm_readi(pcm_, pcm_48k.data(), period_frames_48k);
 
+        if (frames < 0) {
+            frames = snd_pcm_recover(pcm_, frames, 0);
             if (frames < 0) {
-                frames = snd_pcm_recover(pcm_, frames, 0);
-                if (frames < 0) {
-                    SPDLOG_ERROR("AudioCapture: ALSA read failed: {}", snd_strerror(frames));
-                    break;
-                }
-                continue;
+                SPDLOG_ERROR("AudioCapture: ALSA read failed: {}", snd_strerror(frames));
+                break;
             }
-            if (frames == 0) continue;
+            continue;
+        }
+        if (frames == 0) continue;
 
-            // Processor: 48kHz → AGC → RNNoise → resample → 8kHz
-            size_t out_samples = 0;
-            if (!audio_processor_->process(pcm_48k.data(), period_frames_48k,
-                                           pcm_8k.data(), out_samples)) {
-                SPDLOG_ERROR("AudioCapture: processor failed");
-                continue;
-            }
+        // Processor: 48kHz → AGC → RNNoise → resample → 8kHz
+        size_t out_samples = 0;
+        if (!audio_processor_->process(pcm_48k.data(), period_frames_48k,
+                                       pcm_8k.data(), out_samples)) {
+            SPDLOG_ERROR("AudioCapture: processor failed");
+            continue;
+        }
 
-            // Noise gate (threshold lowered to 300 since RNNoise handles noise now)
-            const int16_t noise_gate = 300;
-            int16_t peak = 0;
-
-            // Apply user-configured software gain
-            float vol = volume_.load();
-            if (vol != 1.0f) {
-                for (size_t i = 0; i < out_samples; i++) {
-                    int32_t s = static_cast<int32_t>(pcm_8k[i] * vol);
-                    if (s > 32767) s = 32767;
-                    if (s < -32768) s = -32768;
-                    pcm_8k[i] = static_cast<int16_t>(s);
-                }
-            }
-
+        // Apply user-configured software gain
+        float vol = volume_.load();
+        if (vol != 1.0f) {
             for (size_t i = 0; i < out_samples; i++) {
-                int16_t a = pcm_8k[i] >= 0 ? pcm_8k[i] : -pcm_8k[i];
-                if (a > peak) peak = a;
-            }
-            if (peak < noise_gate) {
-                std::fill(pcm_8k.begin(), pcm_8k.begin() + out_samples, 0);
-            }
-
-            // PCMU encode
-            for (size_t i = 0; i < out_samples; i++) {
-                ulaw_buf[i] = pcmu_encode(pcm_8k[i]);
-            }
-
-            // Timestamp from cumulative samples
-            uint64_t timestamp = (total_samples * 1000000ULL) / sample_rate;
-            total_samples += static_cast<uint64_t>(out_samples);
-
-            AudioFrame frame;
-            frame.timestamp = timestamp;
-            frame.data.assign(ulaw_buf.begin(), ulaw_buf.begin() + out_samples);
-
-            auto shared_frame = std::make_shared<AudioFrame>(std::move(frame));
-            {
-                std::lock_guard<std::mutex> lock(queues_mutex_);
-                for (auto& slot : client_slots_) {
-                    slot->put(shared_frame);
-                }
+                int32_t s = static_cast<int32_t>(pcm_8k[i] * vol);
+                if (s > 32767) s = 32767;
+                if (s < -32768) s = -32768;
+                pcm_8k[i] = static_cast<int16_t>(s);
             }
         }
-    } else {
-        // ── Legacy path: 8kHz capture → gain → noise gate → PCMU (unchanged) ──
-        const int period_frames = 160;
-        std::vector<int16_t> pcm_buf(period_frames);
-        std::vector<uint8_t> ulaw_buf(period_frames);
 
-        uint64_t total_samples = 0;
-        const uint32_t sample_rate = 8000;
+        // Noise gate (low threshold since RNNoise handles noise suppression)
+        const int16_t noise_gate = 300;
+        int16_t peak = 0;
+        for (size_t i = 0; i < out_samples; i++) {
+            int16_t a = pcm_8k[i] >= 0 ? pcm_8k[i] : -pcm_8k[i];
+            if (a > peak) peak = a;
+        }
+        if (peak < noise_gate) {
+            std::fill(pcm_8k.begin(), pcm_8k.begin() + out_samples, 0);
+        }
 
-        while (running_) {
-            snd_pcm_sframes_t frames = snd_pcm_readi(pcm_, pcm_buf.data(), period_frames);
+        // PCMU encode
+        for (size_t i = 0; i < out_samples; i++) {
+            ulaw_buf[i] = pcmu_encode(pcm_8k[i]);
+        }
 
-            if (frames < 0) {
-                frames = snd_pcm_recover(pcm_, frames, 0);
-                if (frames < 0) {
-                    SPDLOG_ERROR("AudioCapture: ALSA read failed: {}", snd_strerror(frames));
-                    break;
-                }
-                continue;
-            }
+        // Timestamp from cumulative samples
+        uint64_t timestamp = (total_samples * 1000000ULL) / sample_rate;
+        total_samples += static_cast<uint64_t>(out_samples);
 
-            if (frames == 0) continue;
+        AudioFrame frame;
+        frame.timestamp = timestamp;
+        frame.data.assign(ulaw_buf.begin(), ulaw_buf.begin() + out_samples);
 
-            float vol = volume_.load();
-            if (vol != 1.0f) {
-                for (snd_pcm_sframes_t i = 0; i < frames; i++) {
-                    int32_t s = static_cast<int32_t>(pcm_buf[i] * vol);
-                    if (s > 32767) s = 32767;
-                    if (s < -32768) s = -32768;
-                    pcm_buf[i] = static_cast<int16_t>(s);
-                }
-            }
-
-            const int16_t noise_gate = 1500;
-            int16_t peak = 0;
-            for (snd_pcm_sframes_t i = 0; i < frames; i++) {
-                int16_t a = pcm_buf[i] >= 0 ? pcm_buf[i] : -pcm_buf[i];
-                if (a > peak) peak = a;
-            }
-            if (peak < noise_gate) {
-                std::fill(pcm_buf.begin(), pcm_buf.begin() + frames, 0);
-            }
-
-            for (snd_pcm_sframes_t i = 0; i < frames; i++) {
-                ulaw_buf[i] = pcmu_encode(pcm_buf[i]);
-            }
-
-            uint64_t timestamp = (total_samples * 1000000ULL) / sample_rate;
-            total_samples += static_cast<uint64_t>(frames);
-
-            AudioFrame frame;
-            frame.timestamp = timestamp;
-            frame.data.assign(ulaw_buf.begin(), ulaw_buf.begin() + frames);
-
-            auto shared_frame = std::make_shared<AudioFrame>(std::move(frame));
-
-            {
-                std::lock_guard<std::mutex> lock(queues_mutex_);
-                for (auto& slot : client_slots_) {
-                    slot->put(shared_frame);
-                }
+        auto shared_frame = std::make_shared<AudioFrame>(std::move(frame));
+        {
+            std::lock_guard<std::mutex> lock(queues_mutex_);
+            for (auto& slot : client_slots_) {
+                slot->put(shared_frame);
             }
         }
     }

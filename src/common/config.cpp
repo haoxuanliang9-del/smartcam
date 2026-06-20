@@ -61,7 +61,6 @@ bool Config::load(const std::string& path) {
 
         if (root["audio_enhance"]) {
             auto n = root["audio_enhance"];
-            if (n["enabled"]) audio_enhance.enabled = n["enabled"].as<bool>();
             if (n["agc_target_rms"]) audio_enhance.agc_target_rms = n["agc_target_rms"].as<float>();
             if (n["agc_max_gain"]) audio_enhance.agc_max_gain = n["agc_max_gain"].as<float>();
             if (n["agc_attack_ms"]) audio_enhance.agc_attack_ms = n["agc_attack_ms"].as<float>();
@@ -72,7 +71,6 @@ bool Config::load(const std::string& path) {
 
         if (root["video_enhance"]) {
             auto n = root["video_enhance"];
-            if (n["enabled"]) video_enhance.enabled = n["enabled"].as<bool>();
             if (n["clahe_clip_limit"]) video_enhance.clahe_clip_limit = n["clahe_clip_limit"].as<float>();
             if (n["clahe_tile_size"]) video_enhance.clahe_tile_size = n["clahe_tile_size"].as<int>();
             if (n["denoise_h"]) video_enhance.denoise_h = n["denoise_h"].as<float>();

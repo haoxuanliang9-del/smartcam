@@ -27,14 +27,11 @@ public:
     bool process(uint8_t* y_data, uint8_t* u_data, uint8_t* v_data,
                  int width, int height, int y_stride, int uv_stride);
 
-    bool is_enabled() const { return enabled_; }
-
     void set_clahe_clip(float limit);
     void set_denoise_strength(float h);
 
 private:
     VideoEnhanceConfig cfg_;
-    bool enabled_ = false;
     int frame_count_ = 0;
 
 #ifdef HAS_OPENCV

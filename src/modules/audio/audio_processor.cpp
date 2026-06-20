@@ -16,18 +16,11 @@ AudioProcessor::~AudioProcessor() {
 
 bool AudioProcessor::init(const AudioEnhanceConfig& cfg) {
     cfg_ = cfg;
-    enabled_ = cfg_.enabled;
-
-    if (!enabled_) {
-        SPDLOG_INFO("AudioProcessor: disabled, will bypass");
-        return true;
-    }
 
     // Init RNNoise
     rnnoise_state_ = rnnoise_create(nullptr); // nullptr = use built-in model
     if (!rnnoise_state_) {
         SPDLOG_ERROR("AudioProcessor: rnnoise_create failed");
-        enabled_ = false;
         return false;
     }
 
@@ -36,7 +29,6 @@ bool AudioProcessor::init(const AudioEnhanceConfig& cfg) {
                      rnnoise_get_frame_size());
         rnnoise_destroy(rnnoise_state_);
         rnnoise_state_ = nullptr;
-        enabled_ = false;
         return false;
     }
 
@@ -57,14 +49,6 @@ bool AudioProcessor::process(const int16_t* input, size_t input_samples,
     if (input_samples != 480) {
         SPDLOG_ERROR("AudioProcessor: expected 480 input samples, got {}", input_samples);
         return false;
-    }
-
-    if (!enabled_) {
-        // Bypass: output silence (shouldn't happen in normal operation —
-        // AudioCapture won't call process() when disabled)
-        std::memset(output, 0, 80 * sizeof(int16_t));
-        output_samples = 80;
-        return true;
     }
 
     // Copy input to working buffer (float)

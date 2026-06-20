@@ -53,7 +53,6 @@ struct DisplayConfig {
 };
 
 struct AudioEnhanceConfig {
-    bool enabled = false;
     float agc_target_rms = 0.1f;       // -20dBFS
     float agc_max_gain = 30.0f;        // +30dB max
     float agc_attack_ms = 5.0f;
@@ -63,7 +62,6 @@ struct AudioEnhanceConfig {
 };
 
 struct VideoEnhanceConfig {
-    bool enabled = false;
     float clahe_clip_limit = 2.0f;
     int clahe_tile_size = 8;
     float denoise_h = 10.0f;           // 0 = bypass denoise

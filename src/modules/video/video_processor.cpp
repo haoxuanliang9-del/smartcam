@@ -12,20 +12,13 @@ namespace smartcam {
 
 bool VideoProcessor::init(const VideoEnhanceConfig& cfg) {
     cfg_ = cfg;
-    enabled_ = cfg_.enabled;
     frame_count_ = 0;
-
-    if (!enabled_) {
-        SPDLOG_INFO("VideoProcessor: disabled, will bypass");
-        return true;
-    }
 
 #ifdef HAS_OPENCV
     clahe_ = cv::createCLAHE(cfg_.clahe_clip_limit,
                              cv::Size(cfg_.clahe_tile_size, cfg_.clahe_tile_size));
     if (!clahe_) {
-        SPDLOG_WARN("VideoProcessor: CLAHE creation failed, continuing with bypass");
-        enabled_ = false;
+        SPDLOG_WARN("VideoProcessor: CLAHE creation failed");
         return false;
     }
 
@@ -35,19 +28,16 @@ bool VideoProcessor::init(const VideoEnhanceConfig& cfg) {
                 cfg_.denoise_h, cfg_.denoise_skip_frames);
     return true;
 #else
-    SPDLOG_WARN("VideoProcessor: OpenCV not available, video enhancement disabled");
-    enabled_ = false;
+    SPDLOG_ERROR("VideoProcessor: OpenCV not available, video enhancement unavailable");
     return false;
 #endif
 }
 
 bool VideoProcessor::process(uint8_t* y_data, uint8_t* u_data, uint8_t* v_data,
                              int width, int height, int y_stride, int uv_stride) {
-    if (!enabled_) return true;
-
-#ifdef HAS_OPENCV
     frame_count_++;
 
+#ifdef HAS_OPENCV
     // ── NLMeans denoise (skip-frame) ──
     if (cfg_.denoise_h > 0.0f) {
         int skip = std::max(1, cfg_.denoise_skip_frames + 1); // skip_frames=2 → every 3rd frame, min 1

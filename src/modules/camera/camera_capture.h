@@ -40,8 +40,8 @@ public:
     using BitrateCallback = std::function<void(uint32_t)>;
     void set_actual_bitrate_callback(BitrateCallback cb) { actual_bitrate_cb_ = std::move(cb); }
 
-    // Inject optional video processor (CLAHE + denoise).
-    // When set and enabled, frames are processed before OSD/encode.
+    // Inject video processor (CLAHE + denoise). Always used.
+    // Must be set via set_video_processor() before start().
     void set_video_processor(std::shared_ptr<class VideoProcessor> processor) {
         video_processor_ = std::move(processor);
     }
@@ -83,7 +83,7 @@ private:
     AVBSFContext* annexb_bsf_ = nullptr;
     std::atomic<bool> request_idr_{false};
 
-    // Enhanced video path (optional)
+    // Video enhancement processor (always used when set)
     std::shared_ptr<class VideoProcessor> video_processor_;
 };
 

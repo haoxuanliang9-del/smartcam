@@ -50,9 +50,9 @@ private:
     std::atomic<float> volume_{1.0f};
     std::thread capture_thread_;
 
-    // Enhanced audio path (optional)
+    // Audio processor (AGC + RNNoise + resample). Always used.
+    // Must be set via set_audio_processor() before init().
     std::shared_ptr<class AudioProcessor> audio_processor_;
-    bool use_enhanced_path_ = false;
 };
 
 } // namespace smartcam
