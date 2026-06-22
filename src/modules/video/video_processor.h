@@ -21,11 +21,11 @@ public:
 
     bool init(const VideoEnhanceConfig& cfg);
 
-    // Process a YUV420P frame in-place.
-    // y_data, u_data, v_data point to the plane buffers.
-    // y_stride, uv_stride are the line strides in bytes.
-    bool process(uint8_t* y_data, uint8_t* u_data, uint8_t* v_data,
-                 int width, int height, int y_stride, int uv_stride);
+    // Apply CLAHE on Y plane (fast, ~2ms, every frame). Caller: capture thread.
+    void apply_clahe(uint8_t* y_data, int width, int height, int y_stride);
+
+    // Apply NLMeans denoise on Y plane (slow, ~240ms, skip-frame). Caller: process thread.
+    void apply_denoise(uint8_t* y_data, int width, int height, int y_stride);
 
     void set_clahe_clip(float limit);
     void set_denoise_strength(float h);

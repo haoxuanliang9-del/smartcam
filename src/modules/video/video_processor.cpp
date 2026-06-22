@@ -33,73 +33,29 @@ bool VideoProcessor::init(const VideoEnhanceConfig& cfg) {
 #endif
 }
 
-bool VideoProcessor::process(uint8_t* y_data, uint8_t* u_data, uint8_t* v_data,
-                             int width, int height, int y_stride, int uv_stride) {
-    frame_count_++;
-
+void VideoProcessor::apply_clahe(uint8_t* y_data, int width, int height, int y_stride) {
 #ifdef HAS_OPENCV
-    // ── NLMeans denoise (skip-frame) ──
-    if (cfg_.denoise_h > 0.0f) {
-        int skip = std::max(1, cfg_.denoise_skip_frames + 1); // skip_frames=2 → every 3rd frame, min 1
-        if ((frame_count_ % skip) == 0) {
-            // Build BGR from YUV for colored denoising
-            cv::Mat y_full(height, width, CV_8UC1, y_data, y_stride);
-            cv::Mat u_half(height / 2, width / 2, CV_8UC1, u_data, uv_stride);
-            cv::Mat v_half(height / 2, width / 2, CV_8UC1, v_data, uv_stride);
+    cv::Mat y_channel(height, width, CV_8UC1, y_data, y_stride);
+    clahe_->apply(y_channel, y_channel);
+#endif
+}
 
-            // Upsample UV to full resolution
-            cv::Mat u_full, v_full;
-            cv::resize(u_half, u_full, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
-            cv::resize(v_half, v_full, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
+void VideoProcessor::apply_denoise(uint8_t* y_data, int width, int height, int y_stride) {
+#ifdef HAS_OPENCV
+    if (cfg_.denoise_h <= 0.0f) return;
 
-            // Merge to BGR
-            cv::Mat yuv_channels[3] = {y_full, u_full, v_full};
-            cv::Mat yuv, bgr;
-            cv::merge(yuv_channels, 3, yuv);
-            cv::cvtColor(yuv, bgr, cv::COLOR_YUV2BGR);
+    frame_count_++;
+    int skip = std::max(1, cfg_.denoise_skip_frames + 1);
+    if ((frame_count_ % skip) != 0) return;
 
-            // NLMeans denoising
-            cv::Mat bgr_denoised;
-            cv::fastNlMeansDenoisingColored(
-                bgr, bgr_denoised,
-                static_cast<float>(cfg_.denoise_h),
-                static_cast<float>(cfg_.denoise_h),
-                7, 21);
-
-            // Convert back to YUV
-            cv::Mat yuv_denoised;
-            cv::cvtColor(bgr_denoised, yuv_denoised, cv::COLOR_BGR2YUV);
-            cv::Mat channels[3];
-            cv::split(yuv_denoised, channels);
-            cv::Mat& y_denoised = channels[0];
-            cv::Mat& u_denoised_full = channels[1];
-            cv::Mat& v_denoised_full = channels[2];
-
-            // Write Y back (full res) — row-by-row respecting stride
-            for (int r = 0; r < height; r++) {
-                std::memcpy(y_data + r * y_stride, y_denoised.ptr<uint8_t>(r), width);
-            }
-
-            // Downsample UV back to half-res and write — row-by-row respecting uv_stride
-            cv::Mat u_half_out(height / 2, width / 2, CV_8UC1);
-            cv::Mat v_half_out(height / 2, width / 2, CV_8UC1);
-            cv::resize(u_denoised_full, u_half_out, cv::Size(width / 2, height / 2), 0, 0, cv::INTER_LINEAR);
-            cv::resize(v_denoised_full, v_half_out, cv::Size(width / 2, height / 2), 0, 0, cv::INTER_LINEAR);
-            for (int r = 0; r < height / 2; r++) {
-                std::memcpy(u_data + r * uv_stride, u_half_out.ptr<uint8_t>(r), width / 2);
-                std::memcpy(v_data + r * uv_stride, v_half_out.ptr<uint8_t>(r), width / 2);
-            }
-        }
-    }
-
-    // ── CLAHE on Y channel (every frame) — always after denoise ──
-    {
-        cv::Mat y_channel(height, width, CV_8UC1, y_data, y_stride);
-        clahe_->apply(y_channel, y_channel);
+    cv::Mat y_channel(height, width, CV_8UC1, y_data, y_stride);
+    cv::Mat y_denoised;
+    cv::fastNlMeansDenoising(y_channel, y_denoised,
+        static_cast<float>(cfg_.denoise_h), 7, 21);
+    for (int r = 0; r < height; r++) {
+        std::memcpy(y_data + r * y_stride, y_denoised.ptr<uint8_t>(r), width);
     }
 #endif
-
-    return true;
 }
 
 void VideoProcessor::set_clahe_clip(float limit) {

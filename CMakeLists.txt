@@ -22,6 +22,7 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
     libavutil
     libswscale
     libavfilter
+    libswresample
 )
 pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
 find_package(yaml-cpp REQUIRED)
@@ -90,6 +91,7 @@ target_link_libraries(smartcam
     avutil
     swscale
     avfilter
+    swresample
 )
 
 target_include_directories(smartcam PRIVATE

@@ -5,11 +5,13 @@
 #include "common/types.h"
 #include "hal/v4l2_source.h"
 #include "middleware/latest_value.h"
+#include "blockingconcurrentqueue.h"
 #include <functional>
 #include <memory>
 #include <atomic>
 #include <vector>
 #include <mutex>
+#include <thread>
 
 struct AVCodecContext;
 struct AVFrame;
@@ -19,6 +21,14 @@ struct AVFilterContext;
 struct AVBSFContext;
 
 namespace smartcam {
+
+// Frame passed from capture thread to process thread.
+// Owns a full YUV420P copy after CLAHE is applied on Y.
+struct ProcessFrame {
+    std::vector<uint8_t> yuv_data;
+    uint64_t timestamp = 0;
+    uint32_t seq = 0;
+};
 
 class CameraCapture {
 public:
@@ -49,7 +59,8 @@ public:
     bool is_running() const { return running_; }
 
 private:
-    void capture_loop();
+    void capture_loop();   // Thread A: capture + CLAHE -> enqueue
+    void process_loop();   // Thread B: dequeue -> NLMeans -> OSD -> encode
     bool init_encoder();
     bool init_osd_filter();
     bool encode_frame(AVFrame* frame, uint32_t frame_seq, uint64_t capture_ts);
@@ -85,6 +96,11 @@ private:
 
     // Video enhancement processor (always used when set)
     std::shared_ptr<class VideoProcessor> video_processor_;
+
+    // Dual-thread pipeline
+    std::thread capture_thread_;
+    std::thread process_thread_;
+    moodycamel::BlockingConcurrentQueue<ProcessFrame> frame_queue_;
 };
 
 } // namespace smartcam

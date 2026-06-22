@@ -5,12 +5,20 @@
 #include <algorithm>
 #include <cstring>
 
+extern "C" {
+#include <libswresample/swresample.h>
+}
+
 namespace smartcam {
 
 AudioProcessor::~AudioProcessor() {
     if (rnnoise_state_) {
         rnnoise_destroy(rnnoise_state_);
         rnnoise_state_ = nullptr;
+    }
+    if (swr_) {
+        swr_free(&swr_);
+        swr_ = nullptr;
     }
 }
 
@@ -38,8 +46,27 @@ bool AudioProcessor::init(const AudioEnhanceConfig& cfg) {
     agc_release_coeff_ = std::exp(-frame_ms / cfg_.agc_release_ms);
     agc_current_gain_ = 1.0f;
 
+    // Init swresample: 48kHz int16 mono → 8kHz int16 mono
+    swr_ = swr_alloc_set_opts(nullptr,
+        AV_CH_LAYOUT_MONO, AV_SAMPLE_FMT_S16, 8000,
+        AV_CH_LAYOUT_MONO, AV_SAMPLE_FMT_S16, 48000,
+        0, nullptr);
+    if (!swr_) {
+        SPDLOG_ERROR("AudioProcessor: swr_alloc_set_opts failed");
+        rnnoise_destroy(rnnoise_state_);
+        rnnoise_state_ = nullptr;
+        return false;
+    }
+    if (swr_init(swr_) < 0) {
+        SPDLOG_ERROR("AudioProcessor: swr_init failed");
+        swr_free(&swr_);
+        rnnoise_destroy(rnnoise_state_);
+        rnnoise_state_ = nullptr;
+        return false;
+    }
+
     SPDLOG_INFO("AudioProcessor initialized: AGC(target={:.3f}, max_gain={:.1f}dB), "
-                "RNNoise(level={:.1f})",
+                "RNNoise(level={:.1f}), swresample 48k→8k",
                 cfg_.agc_target_rms, cfg_.agc_max_gain, cfg_.denoise_level);
     return true;
 }
@@ -87,8 +114,27 @@ bool AudioProcessor::process(const int16_t* input, size_t input_samples,
         }
     }
 
-    // Stage 3: Resample 48kHz → 8kHz
-    resample_48k_to_8k(work, 480, output, output_samples);
+    // Stage 3: swresample 48kHz → 8kHz (int16 → int16)
+    {
+        // Convert float (int16-range) to int16 for swresample
+        int16_t src[480];
+        for (int i = 0; i < 480; i++) {
+            int32_t v = static_cast<int32_t>(std::round(work[i]));
+            if (v > 32767) v = 32767;
+            if (v < -32768) v = -32768;
+            src[i] = static_cast<int16_t>(v);
+        }
+
+        const uint8_t* in_buf[1] = { (const uint8_t*)src };
+        uint8_t* out_buf[1] = { (uint8_t*)output };
+        int ret = swr_convert(swr_, out_buf, 80, in_buf, 480);
+        if (ret < 0) {
+            SPDLOG_ERROR("AudioProcessor: swr_convert failed: {}", ret);
+            output_samples = 0;
+            return false;
+        }
+        output_samples = static_cast<size_t>(ret);
+    }
 
     return true;
 }
@@ -120,45 +166,6 @@ void AudioProcessor::agc_process(int16_t* samples, size_t count) {
         if (s > 32767.0f) s = 32767.0f;
         if (s < -32768.0f) s = -32768.0f;
         samples[i] = static_cast<int16_t>(s);
-    }
-}
-
-void AudioProcessor::resample_48k_to_8k(const float* in, size_t in_count,
-                                         int16_t* out, size_t& out_count) {
-    // Two-stage decimation: 48kHz → 24kHz (÷2) → 8kHz (÷3)
-    // Stage 1: half-band FIR + decimate by 2
-    // 7-tap half-band filter, cutoff ≈ 12kHz
-    static constexpr float hb_coeff[7] = {
-        -0.03125f, 0.0f, 0.28125f, 0.5f, 0.28125f, 0.0f, -0.03125f
-    };
-
-    float stage1[240];
-    for (int i = 0; i < 240; i++) {
-        float sum = 0.0f;
-        for (int j = 0; j < 7; j++) {
-            int idx = 2 * i - j + 3;
-            if (idx >= 0 && idx < static_cast<int>(in_count)) {
-                sum += in[idx] * hb_coeff[j];
-            }
-        }
-        stage1[i] = sum;
-    }
-
-    // Stage 2: 3-tap anti-alias filter + decimate by 3
-    // Simple triangular filter [1, 2, 1]/4, cutoff ≈ 4kHz
-    out_count = 80;
-    for (int i = 0; i < 80; i++) {
-        int base = i * 3;
-        float s0 = (base - 1 >= 0)            ? stage1[base - 1] : 0.0f;
-        float s1 = stage1[base];
-        float s2 = (base + 1 < 240)           ? stage1[base + 1] : 0.0f;
-        float sum = (s0 + 2.0f * s1 + s2) / 4.0f;
-
-        // Convert to int16 with clamping
-        int32_t val = static_cast<int32_t>(sum);
-        if (val > 32767) val = 32767;
-        if (val < -32768) val = -32768;
-        out[i] = static_cast<int16_t>(val);
     }
 }
 

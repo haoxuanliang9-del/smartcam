@@ -6,6 +6,7 @@
 #include <cstddef>
 
 struct DenoiseState;
+struct SwrContext;
 
 namespace smartcam {
 
@@ -31,11 +32,10 @@ public:
 
 private:
     void agc_process(int16_t* samples, size_t count);
-    void resample_48k_to_8k(const float* in, size_t in_count,
-                            int16_t* out, size_t& out_count);
 
     AudioEnhanceConfig cfg_;
     DenoiseState* rnnoise_state_ = nullptr;
+    SwrContext* swr_ = nullptr;
 
     // AGC state
     float agc_current_gain_ = 1.0f;
