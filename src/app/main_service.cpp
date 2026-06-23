@@ -56,7 +56,8 @@ void MainService::setup_logging() {
     auto logger = std::make_shared<spdlog::logger>("smartcam", sinks.begin(), sinks.end());
 
     std::string level = config_.system.log_level;
-    if (level == "debug") logger->set_level(spdlog::level::debug);
+    if (level == "trace") logger->set_level(spdlog::level::trace);
+    else if (level == "debug") logger->set_level(spdlog::level::debug);
     else if (level == "warn") logger->set_level(spdlog::level::warn);
     else if (level == "error") logger->set_level(spdlog::level::err);
     else logger->set_level(spdlog::level::info);

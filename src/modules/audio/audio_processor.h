@@ -27,6 +27,9 @@ public:
     bool process(const int16_t* input, size_t input_samples,
                  int16_t* output, size_t& output_samples);
 
+    // RNNoise VAD score for the most recent frame (0.0 = noise, 1.0 = speech)
+    float last_vad() const { return last_vad_; }
+
     void set_denoise_level(float level);
     void set_agc_target(float level);
 
@@ -41,6 +44,9 @@ private:
     float agc_current_gain_ = 1.0f;
     float agc_attack_coeff_ = 0.0f;
     float agc_release_coeff_ = 0.0f;
+
+    // RNNoise VAD for the most recent frame
+    float last_vad_ = 0.0f;
 };
 
 } // namespace smartcam

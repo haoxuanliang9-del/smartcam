@@ -11,7 +11,8 @@ namespace smartcam {
 // ITU-T G.711 μ-law encoding
 uint8_t AudioCapture::pcmu_encode(int16_t sample) {
     int sign = (sample >> 8) & 0x80;
-    if (sign) sample = -sample;
+    // Guard INT16_MIN (-32768) against two's-complement negation overflow
+    if (sign) sample = (sample == -32768) ? 32767 : -sample;
     if (sample > 32635) sample = 32635;
 
     int exponent = 7;
@@ -135,14 +136,19 @@ void AudioCapture::capture_loop() {
             }
         }
 
-        // Noise gate (low threshold since RNNoise handles noise suppression)
-        const int16_t noise_gate = 300;
+        // Noise gate with VAD assist (gate only non-speech silence).
+        // Low threshold since RNNoise handles noise suppression;
+        // VAD prevents gating speech frames that RNNoise partially suppressed.
+        const int16_t noise_gate = 30;
+        float vad = audio_processor_->last_vad();
         int16_t peak = 0;
         for (size_t i = 0; i < out_samples; i++) {
             int16_t a = pcm_8k[i] >= 0 ? pcm_8k[i] : -pcm_8k[i];
             if (a > peak) peak = a;
         }
-        if (peak < noise_gate) {
+        SPDLOG_DEBUG("Audio noise gate: peak={}, vad={:.3f}, gate={}",
+                     peak, vad, (peak < noise_gate && vad < 0.3f) ? "ON" : "OFF");
+        if (peak < noise_gate && vad < 0.3f) {
             std::fill(pcm_8k.begin(), pcm_8k.begin() + out_samples, 0);
         }
 

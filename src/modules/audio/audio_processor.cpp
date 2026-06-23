@@ -101,7 +101,7 @@ bool AudioProcessor::process(const int16_t* input, size_t input_samples,
     // Stage 2: RNNoise denoise
     {
         float rnnoise_out[480];
-        rnnoise_process_frame(rnnoise_state_, rnnoise_out, work);
+        last_vad_ = rnnoise_process_frame(rnnoise_state_, rnnoise_out, work);
 
         // Soft mix: denoise_level controls blend between original and processed
         float level = std::clamp(cfg_.denoise_level, 0.0f, 1.0f);
