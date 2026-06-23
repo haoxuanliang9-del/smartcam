@@ -5,7 +5,6 @@
 
 #ifdef HAS_OPENCV
 #include <opencv2/imgproc.hpp>
-#include <opencv2/photo.hpp>
 #endif
 
 namespace smartcam {
@@ -44,16 +43,14 @@ void VideoProcessor::apply_denoise(uint8_t* y_data, int width, int height, int y
 #ifdef HAS_OPENCV
     if (cfg_.denoise_h <= 0.0f) return;
 
-    frame_count_++;
-    int skip = std::max(1, cfg_.denoise_skip_frames + 1);
-    if ((frame_count_ % skip) != 0) return;
-
     cv::Mat y_channel(height, width, CV_8UC1, y_data, y_stride);
-    cv::Mat y_denoised;
-    cv::fastNlMeansDenoising(y_channel, y_denoised,
-        static_cast<float>(cfg_.denoise_h), 7, 21);
+    cv::Mat y_filtered;
+    int d = std::max(3, std::min(15, static_cast<int>(cfg_.denoise_h)));
+    double sigma_c = static_cast<double>(cfg_.denoise_h) * 2.0;
+    double sigma_s = static_cast<double>(cfg_.denoise_h) * 0.5;
+    cv::bilateralFilter(y_channel, y_filtered, d, sigma_c, sigma_s);
     for (int r = 0; r < height; r++) {
-        std::memcpy(y_data + r * y_stride, y_denoised.ptr<uint8_t>(r), width);
+        std::memcpy(y_data + r * y_stride, y_filtered.ptr<uint8_t>(r), width);
     }
 #endif
 }
