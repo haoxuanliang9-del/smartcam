@@ -126,7 +126,7 @@ bool V4l2Source::open(const std::string& device_path,
     v4l2_requestbuffers req = {};
     req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     req.memory = V4L2_MEMORY_MMAP;
-    req.count = 2;
+    req.count = 4;
     if (ioctl(v4l2_fd_, VIDIOC_REQBUFS, &req) < 0) {
         SPDLOG_ERROR("V4L2: VIDIOC_REQBUFS failed: {}", strerror(errno));
         ::close(v4l2_fd_); v4l2_fd_ = -1;
@@ -244,6 +244,16 @@ void V4l2Source::capture_loop() {
             }
             SPDLOG_WARN("V4L2: VIDIOC_DQBUF error: {}", strerror(errno));
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
+        // Check for hardware/driver-reported corrupted frame
+        if (buf.flags & V4L2_BUF_FLAG_ERROR) {
+            SPDLOG_WARN("V4L2: corrupted frame detected (flags=0x{:x}, seq={}), skipping",
+                        buf.flags, buf.sequence);
+            if (ioctl(v4l2_fd_, VIDIOC_QBUF, &buf) < 0) {
+                SPDLOG_WARN("V4L2: VIDIOC_QBUF error on corrupted frame: {}", strerror(errno));
+            }
             continue;
         }
 

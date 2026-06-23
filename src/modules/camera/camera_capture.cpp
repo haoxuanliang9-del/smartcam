@@ -225,29 +225,19 @@ void CameraCapture::start() {
     }
 
     running_ = true;
-    capture_thread_ = std::thread(&CameraCapture::capture_loop, this);
-    process_thread_ = std::thread(&CameraCapture::process_loop, this);
-    SPDLOG_INFO("CameraCapture started (dual-thread pipeline)");
+    std::thread(&CameraCapture::capture_loop, this).detach();
+    SPDLOG_INFO("CameraCapture started");
 }
 
 void CameraCapture::stop() {
-    if (!running_) return;
     running_ = false;
     v4l2_source_.stop();
-
-    // Wait for capture thread to exit (v4l2 stop unblocks get_frame)
-    if (capture_thread_.joinable()) capture_thread_.join();
-
-    // Send sentinel to unblock process thread and wait
-    frame_queue_.try_enqueue(ProcessFrame{});
-    if (process_thread_.joinable()) process_thread_.join();
-
     SPDLOG_INFO("CameraCapture stopped");
 }
 
 void CameraCapture::capture_loop() {
-    // Thread A: fast path — capture + CLAHE -> enqueue
     RawFrame raw_frame;
+    int64_t frame_count = 0;
     uint32_t frame_seq = 0;
 
     while (running_) {
@@ -255,37 +245,7 @@ void CameraCapture::capture_loop() {
             continue;
         }
 
-        // CLAHE on Y plane (in-place, ~2ms)
-        video_processor_->apply_clahe(raw_frame.data.data(),
-            static_cast<int>(width_), static_cast<int>(height_),
-            static_cast<int>(width_));
-
-        // Move frame data into queue
-        ProcessFrame pf;
-        pf.yuv_data = std::move(raw_frame.data);
-        pf.timestamp = raw_frame.timestamp;
-        pf.seq = ++frame_seq;
-        frame_queue_.try_enqueue(std::move(pf));
-    }
-}
-
-void CameraCapture::process_loop() {
-    // Thread B: heavy path — NLMeans + OSD + encode
-    int64_t frame_count = 0;
-
-    while (true) {
-        ProcessFrame pf;
-        frame_queue_.wait_dequeue(pf);
-        if (pf.yuv_data.empty()) break; // sentinel from stop()
-
-        // Point yuv_frame_ at queued data (valid for this iteration)
-        yuv_frame_->data[0] = pf.yuv_data.data();
-        yuv_frame_->data[1] = pf.yuv_data.data() + width_ * height_;
-        yuv_frame_->data[2] = pf.yuv_data.data() + width_ * height_ * 5 / 4;
-        yuv_frame_->linesize[0] = static_cast<int>(width_);
-        yuv_frame_->linesize[1] = static_cast<int>(width_ / 2);
-        yuv_frame_->linesize[2] = static_cast<int>(width_ / 2);
-        yuv_frame_->pts = frame_count++;
+        uint32_t current_seq = ++frame_seq;
 
         // IDR
         bool force_idr_now = request_idr_.exchange(false, std::memory_order_acq_rel);
@@ -297,11 +257,22 @@ void CameraCapture::process_loop() {
             yuv_frame_->pict_type = AV_PICTURE_TYPE_NONE;
         }
 
-        // NLMeans denoise on Y plane (applied in-place, skip-frame aware)
-        video_processor_->apply_denoise(
-            pf.yuv_data.data(),
+        // CLAHE + Bilateral denoise on Y plane (in-place, every frame)
+        video_processor_->process(
+            raw_frame.data.data(),
             static_cast<int>(width_), static_cast<int>(height_),
             static_cast<int>(width_));
+
+        // Point yuv_frame_ at processed data.
+        // Safe: raw_frame.data lives on this thread's stack for the full iteration
+        // and single-thread means no concurrent free/reuse of the backing vector.
+        yuv_frame_->data[0] = raw_frame.data.data();
+        yuv_frame_->data[1] = raw_frame.data.data() + width_ * height_;
+        yuv_frame_->data[2] = raw_frame.data.data() + width_ * height_ * 5 / 4;
+        yuv_frame_->linesize[0] = static_cast<int>(width_);
+        yuv_frame_->linesize[1] = static_cast<int>(width_ / 2);
+        yuv_frame_->linesize[2] = static_cast<int>(width_ / 2);
+        yuv_frame_->pts = frame_count++;
 
         // OSD + encode
         if (osd_config_.enabled && filter_graph_) {
@@ -314,10 +285,10 @@ void CameraCapture::process_loop() {
                 SPDLOG_WARN("Failed to pull frame from filter");
                 continue;
             }
-            encode_frame(filter_frame_, pf.seq, pf.timestamp);
+            encode_frame(filter_frame_, current_seq, raw_frame.timestamp);
             av_frame_unref(filter_frame_);
         } else {
-            encode_frame(yuv_frame_, pf.seq, pf.timestamp);
+            encode_frame(yuv_frame_, current_seq, raw_frame.timestamp);
         }
 
         if (!force_idr_now) {
@@ -325,6 +296,7 @@ void CameraCapture::process_loop() {
         }
     }
 }
+
 bool CameraCapture::encode_frame(AVFrame* frame, uint32_t frame_seq, uint64_t capture_ts) {
     uint32_t bitrate = target_bitrate_.load();
     if (encoder_ctx_->bit_rate != static_cast<int64_t>(bitrate) * 1000) {

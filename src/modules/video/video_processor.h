@@ -21,18 +21,14 @@ public:
 
     bool init(const VideoEnhanceConfig& cfg);
 
-    // Apply CLAHE on Y plane (fast, ~2ms, every frame). Caller: capture thread.
-    void apply_clahe(uint8_t* y_data, int width, int height, int y_stride);
-
-    // Apply NLMeans denoise on Y plane (slow, ~240ms, skip-frame). Caller: process thread.
-    void apply_denoise(uint8_t* y_data, int width, int height, int y_stride);
+    // Process Y plane in-place: CLAHE contrast + Bilateral denoise (every frame)
+    void process(uint8_t* y_data, int width, int height, int y_stride);
 
     void set_clahe_clip(float limit);
     void set_denoise_strength(float h);
 
 private:
     VideoEnhanceConfig cfg_;
-    int frame_count_ = 0;
 
 #ifdef HAS_OPENCV
     cv::Ptr<cv::CLAHE> clahe_;
